@@ -1,3 +1,7 @@
 *.png
 *.txt
 .github/
+*.md
+install.sh
+apps/windows-app/*
+**/dist/
