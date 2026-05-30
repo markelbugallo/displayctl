@@ -1,4 +1,5 @@
 import St from 'gi://St';
+
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { calculateSoftwareOpacity } from '@displayctl/core';
 
@@ -78,7 +79,6 @@ export class OverlayManager {
 
 
   // Destroys and clears all active software overlays.
-
   public clearOverlays(): void {
     if (this.overlays) {
       for (const overlay of this.overlays.values()) {

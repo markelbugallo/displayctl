@@ -5,7 +5,12 @@ import { IDisplayController, MonitorInfo, BacklightState } from '@displayctl/cor
 export class DdcutilController implements IDisplayController {
   private isRunning = false;
   private ddcBusCache = new Map<string, number>();
+  private targetBrightnessMap = new Map<string, number>();
+  private currentBrightnessMap = new Map<string, number>();
 
+  public isBusy(): boolean {
+    return this.isRunning;
+  }
 
   //Checks if `ddcutil` command-line tool is installed in the system path.
   public isDdcutilAvailable(): boolean {
@@ -29,8 +34,8 @@ export class DdcutilController implements IDisplayController {
           argv: ['ddcutil', 'detect', '--brief', '--skip-ddc-checks'],
           flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENT,
         });
-
         proc.init(null);
+
         proc.communicate_utf8_async(null, null, (obj: any, res: any) => {
           this.isRunning = false;
           try {
@@ -62,7 +67,6 @@ export class DdcutilController implements IDisplayController {
 
 
   // Retrieves the current hardware backlight value via DDC/CI VCP code 10.
-
   public async getHardwareBrightness(monitor: MonitorInfo): Promise<BacklightState | null> {
     if (!this.isDdcutilAvailable() || this.isRunning) {
       return null;
@@ -83,8 +87,8 @@ export class DdcutilController implements IDisplayController {
           argv: argv,
           flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENT,
         });
-
         proc.init(null);
+
         proc.communicate_utf8_async(null, null, (obj: any, res: any) => {
           this.isRunning = false;
           try {
@@ -93,12 +97,17 @@ export class DdcutilController implements IDisplayController {
               const parsed = this.parseDdcutilGetvcp(stdout);
               if (parsed) {
                 const { current, max } = parsed;
+                const normalized = current / max;
+                
+                this.currentBrightnessMap.set(monitor.id, normalized);
+                this.targetBrightnessMap.set(monitor.id, normalized);
+
                 resolve({
                   connector: monitor.id,
                   bus: bus,
                   min: 0,
                   max,
-                  value: current / max,
+                  value: normalized,
                   isHardware: true,
                 });
                 return;
@@ -117,24 +126,47 @@ export class DdcutilController implements IDisplayController {
     });
   }
 
-  // Sets the physical monitor brightness via DDC/CI VCP code 10.
+  // Sets the physical monitor brightness via DDC/CI VCP code 10 using a queue.
   public async setHardwareBrightness(
     monitor: MonitorInfo,
     state: BacklightState,
     value: number
   ): Promise<void> {
-    if (!this.isDdcutilAvailable() || this.isRunning) {
+    if (!this.isDdcutilAvailable()) {
       return;
     }
 
-    const min = state.min ?? 0;
-    const max = state.max ?? 100;
-    const bus = state.bus;
+    this.targetBrightnessMap.set(monitor.id, value);
 
-    const targetVal = Math.round(min + value * (max - min));
-    const clampedVal = Math.max(min, Math.min(max, targetVal));
+    if (this.isRunning) {
+      return;
+    }
+
+    void this.processBrightnessQueue(monitor, state);
+  }
+
+  private async processBrightnessQueue(
+    monitor: MonitorInfo,
+    state: BacklightState
+  ): Promise<void> {
+    const target = this.targetBrightnessMap.get(monitor.id);
+    if (target === undefined) {
+      return;
+    }
+
+    const current = this.currentBrightnessMap.get(monitor.id);
+    if (current === target) {
+      return;
+    }
 
     this.isRunning = true;
+
+    const min = state.min ?? 0;
+    const max = state.max ?? 100;
+    const bus = state.bus ?? this.ddcBusCache.get(monitor.id);
+
+    const targetVal = Math.round(min + target * (max - min));
+    const clampedVal = Math.max(min, Math.min(max, targetVal));
 
     const argv = ['ddcutil'];
     if (bus !== undefined) {
@@ -145,21 +177,23 @@ export class DdcutilController implements IDisplayController {
       argv.push('--noverify');
     }
 
-    return new Promise((resolve) => {
+    return new Promise<void>((resolve) => {
       try {
         const proc = new Gio.Subprocess({
           argv: argv,
           flags: Gio.SubprocessFlags.NONE,
         });
         proc.init(null);
+
         proc.wait_async(null, (obj: any, res: any) => {
           this.isRunning = false;
           try {
             obj!.wait_finish(res);
+            this.currentBrightnessMap.set(monitor.id, target);
           } catch (e) {
             console.error('[displayctl] ddcutil setvcp failed:', e);
           }
-          resolve();
+          void this.processBrightnessQueue(monitor, state).then(resolve);
         });
       } catch (e) {
         this.isRunning = false;
