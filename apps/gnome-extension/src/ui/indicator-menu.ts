@@ -5,6 +5,9 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Slider from 'resource:///org/gnome/shell/ui/slider.js';
 
+import { RefreshRateMenu } from './refresh-rate-menu.js';
+import type { RefreshRateOption } from '../services/display-config.js';
+
 type MonitorMenuEntry = {
   connector: string;
   name: string;
@@ -13,6 +16,7 @@ type MonitorMenuEntry = {
 type IndicatorMenuHandlers = {
   onBrightnessChanged: (value: number) => void;
   onPrimaryMonitorSelected: (connector: string) => void;
+  onRefreshRateSelected: (refreshRate: number) => void;
   onMenuOpen?: () => void;
 };
 
@@ -23,6 +27,7 @@ export class IndicatorMenu {
   private brightnessSeparatorItem: any = null;
   private brightnessLabelItem: any = null;
   private primaryMonitorItem: any = null;
+  private refreshRateMenu: RefreshRateMenu | null = null;
   private primaryMonitorItems = new Map<string, any>();
   private menuOpenId: number | null = null;
   private onPrimaryMonitorSelected: (connector: string) => void;
@@ -31,6 +36,9 @@ export class IndicatorMenu {
     this.indicator = new PanelMenu.Button(0.0, 'Displayctl');
     this.indicator.add_child(icon);
     this.onPrimaryMonitorSelected = handlers.onPrimaryMonitorSelected;
+    this.refreshRateMenu = new RefreshRateMenu({
+      onRefreshRateSelected: handlers.onRefreshRateSelected,
+    });
 
     this.buildMenu(handlers.onBrightnessChanged);
 
@@ -67,6 +75,7 @@ export class IndicatorMenu {
     this.brightnessSeparatorItem = null;
     this.brightnessLabelItem = null;
     this.primaryMonitorItem = null;
+    this.refreshRateMenu = null;
   }
 
   setVisible(visible: boolean) {
@@ -129,6 +138,14 @@ export class IndicatorMenu {
     this.brightnessSeparatorItem.show();
   }
 
+  updateRefreshRateMenu(label: string | null, options: RefreshRateOption[], canApply: boolean): void {
+    if (!this.refreshRateMenu) {
+      return;
+    }
+
+    this.refreshRateMenu.update(label, options, canApply);
+  }
+
   setBrightnessEnabled(enabled: boolean) {
     if (!this.brightnessItem) {
       return;
@@ -166,6 +183,8 @@ export class IndicatorMenu {
       this.brightnessLabelItem.label.set_x_align(0);
     }
     this.indicator.menu.addMenuItem(this.brightnessLabelItem);
+
+    this.indicator.menu.addMenuItem(this.refreshRateMenu!.item);
 
     const hasPopupSlider = typeof (PopupMenu as any).PopupSliderMenuItem === 'function';
     if (hasPopupSlider) {

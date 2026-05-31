@@ -7,6 +7,9 @@ export class DdcutilController implements IDisplayController {
   private ddcBusCache = new Map<string, number>();
   private targetBrightnessMap = new Map<string, number>();
   private currentBrightnessMap = new Map<string, number>();
+  private pendingMonitors = new Map<string, { monitor: MonitorInfo; state: BacklightState }>();
+  private lastReadTime = new Map<string, number>();
+  private lastReadValue = new Map<string, BacklightState>();
 
   public isBusy(): boolean {
     return this.isRunning;
@@ -24,6 +27,18 @@ export class DdcutilController implements IDisplayController {
    */
   public async detectDdcBuses(externalConnectors: string[]): Promise<Map<string, number>> {
     if (!this.isDdcutilAvailable() || this.isRunning || externalConnectors.length === 0) {
+      return this.ddcBusCache;
+    }
+
+    // Optimization: Skip detect if all external connectors are already cached
+    let allCached = true;
+    for (const conn of externalConnectors) {
+      if (!this.ddcBusCache.has(conn)) {
+        allCached = false;
+        break;
+      }
+    }
+    if (allCached && externalConnectors.length > 0) {
       return this.ddcBusCache;
     }
 
@@ -72,6 +87,14 @@ export class DdcutilController implements IDisplayController {
       return null;
     }
 
+    // Optimization: 5-second TTL cache for hardware reads
+    const now = Date.now();
+    const cachedTime = this.lastReadTime.get(monitor.id) || 0;
+    const cachedVal = this.lastReadValue.get(monitor.id);
+    if (cachedVal && (now - cachedTime < 5000)) {
+      return cachedVal;
+    }
+
     this.isRunning = true;
     const bus = this.ddcBusCache.get(monitor.id);
 
@@ -102,14 +125,19 @@ export class DdcutilController implements IDisplayController {
                 this.currentBrightnessMap.set(monitor.id, normalized);
                 this.targetBrightnessMap.set(monitor.id, normalized);
 
-                resolve({
+                const state: BacklightState = {
                   connector: monitor.id,
                   bus: bus,
                   min: 0,
                   max,
                   value: normalized,
                   isHardware: true,
-                });
+                };
+
+                this.lastReadTime.set(monitor.id, Date.now());
+                this.lastReadValue.set(monitor.id, state);
+
+                resolve(state);
                 return;
               }
             }
@@ -137,30 +165,63 @@ export class DdcutilController implements IDisplayController {
     }
 
     this.targetBrightnessMap.set(monitor.id, value);
+    this.pendingMonitors.set(monitor.id, { monitor, state });
 
+    void this.processQueue();
+  }
+
+  private async processQueue(): Promise<void> {
     if (this.isRunning) {
       return;
     }
-
-    void this.processBrightnessQueue(monitor, state);
-  }
-
-  private async processBrightnessQueue(
-    monitor: MonitorInfo,
-    state: BacklightState
-  ): Promise<void> {
-    const target = this.targetBrightnessMap.get(monitor.id);
-    if (target === undefined) {
-      return;
-    }
-
-    const current = this.currentBrightnessMap.get(monitor.id);
-    if (current === target) {
-      return;
-    }
-
     this.isRunning = true;
 
+    try {
+      while (true) {
+        // Find a connector that needs an update
+        let connectorToUpdate: string | null = null;
+        for (const [connector, target] of this.targetBrightnessMap.entries()) {
+          const current = this.currentBrightnessMap.get(connector);
+          if (current !== target) {
+            connectorToUpdate = connector;
+            break;
+          }
+        }
+
+        if (!connectorToUpdate) {
+          break;
+        }
+
+        const pending = this.pendingMonitors.get(connectorToUpdate);
+        if (!pending) {
+          this.currentBrightnessMap.set(connectorToUpdate, this.targetBrightnessMap.get(connectorToUpdate)!);
+          continue;
+        }
+
+        const { monitor, state } = pending;
+        const target = this.targetBrightnessMap.get(connectorToUpdate)!;
+
+        // Perform the update
+        await this.executeDdcutilSetvcp(monitor, state, target);
+        this.currentBrightnessMap.set(connectorToUpdate, target);
+
+        // Update cache with the new value to keep it warm and avoid immediate re-read
+        const cachedVal = this.lastReadValue.get(connectorToUpdate);
+        if (cachedVal) {
+          cachedVal.value = target;
+          this.lastReadTime.set(connectorToUpdate, Date.now());
+        }
+      }
+    } finally {
+      this.isRunning = false;
+    }
+  }
+
+  private async executeDdcutilSetvcp(
+    monitor: MonitorInfo,
+    state: BacklightState,
+    target: number
+  ): Promise<void> {
     const min = state.min ?? 0;
     const max = state.max ?? 100;
     const bus = state.bus ?? this.ddcBusCache.get(monitor.id);
@@ -186,21 +247,27 @@ export class DdcutilController implements IDisplayController {
         proc.init(null);
 
         proc.wait_async(null, (obj: any, res: any) => {
-          this.isRunning = false;
           try {
             obj!.wait_finish(res);
-            this.currentBrightnessMap.set(monitor.id, target);
           } catch (e) {
             console.error('[displayctl] ddcutil setvcp failed:', e);
           }
-          void this.processBrightnessQueue(monitor, state).then(resolve);
+          resolve();
         });
       } catch (e) {
-        this.isRunning = false;
         console.error('[displayctl] Failed to run ddcutil setvcp:', e);
         resolve();
       }
     });
+  }
+
+  public clear(): void {
+    this.ddcBusCache.clear();
+    this.targetBrightnessMap.clear();
+    this.currentBrightnessMap.clear();
+    this.pendingMonitors.clear();
+    this.lastReadTime.clear();
+    this.lastReadValue.clear();
   }
 
   private parseDdcutilGetvcp(stdout: string): { current: number; max: number } | null {

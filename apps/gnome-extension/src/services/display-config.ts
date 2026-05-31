@@ -3,6 +3,19 @@ import GLib from 'gi://GLib';
 
 type GLibVariant = InstanceType<typeof GLib.Variant>;
 
+export type MonitorModeEntry = {
+  id: string;
+  refreshRate: number;
+  isCurrent: boolean;
+  isPreferred: boolean;
+};
+
+export type RefreshRateOption = {
+  refreshRate: number;
+  label: string;
+  isCurrent: boolean;
+};
+
 export type MonitorMenuEntry = {
   connector: string;
   name: string;
@@ -105,7 +118,7 @@ export class DisplayConfigClient {
     });
   }
 
-  async applyPrimaryMonitor(connector: string): Promise<boolean> {
+  async setPrimaryMonitor(connector: string): Promise<boolean> {
     if (!this.proxy) {
       return false;
     }
@@ -121,95 +134,36 @@ export class DisplayConfigClient {
     }
 
     const modeByConnector = this.getCurrentModeByConnector(state.monitors);
-    const updatedLogicalMonitors: any[] = [];
-    let foundConnector = false;
+    return this.applyMonitorConfiguration(state, modeByConnector, connector, new Map());
+  }
 
-    for (const logicalMonitor of state.logicalMonitors || []) {
-      const [x, y, scale, transform, isPrimary, monitors] = logicalMonitor;
-      const updatedMonitors: any[] = [];
+  async applyPrimaryMonitor(connector: string): Promise<boolean> {
+    return this.setPrimaryMonitor(connector);
+  }
 
-      for (const monitor of monitors) {
-        let connectorName = '';
-        let monitorProperties: any = {};
-
-        if (Array.isArray(monitor)) {
-          if (Array.isArray(monitor[0])) {
-            connectorName = monitor[0][0];
-            monitorProperties = monitor[2] || {};
-          } else {
-            connectorName = monitor[0];
-            monitorProperties = {};
-          }
-        } else if (typeof monitor === 'string') {
-          connectorName = monitor;
-          monitorProperties = {};
-        }
-
-        if (!connectorName) {
-          console.error('Could not determine connector name from monitor:', monitor);
-          return false;
-        }
-
-        const currentModeId = modeByConnector.get(connectorName);
-        if (!currentModeId) {
-          console.error(`No available mode for connector ${connectorName}.`);
-          return false;
-        }
-
-        updatedMonitors.push([connectorName, currentModeId, monitorProperties]);
-        if (connectorName === connector) {
-          foundConnector = true;
-        }
-      }
-
-      const newIsPrimary = monitors.some((m: any) => {
-        let connName = '';
-        if (Array.isArray(m)) {
-          if (Array.isArray(m[0])) {
-            connName = m[0][0];
-          } else {
-            connName = m[0];
-          }
-        } else if (typeof m === 'string') {
-          connName = m;
-        }
-        return connName === connector;
-      });
-
-      updatedLogicalMonitors.push([x, y, scale, transform, newIsPrimary, updatedMonitors]);
-    }
-
-    if (!foundConnector) {
-      console.error(`Connector ${connector} not found.`);
+  async applyMonitorRefreshRate(connector: string, refreshRate: number): Promise<boolean> {
+    if (!this.proxy) {
       return false;
     }
 
-    const configProperties = this.getApplyConfigProperties(state.properties);
-    const params = new GLib.Variant('(uua(iiduba(ssa{sv}))a{sv})', [
-      state.serial,
-      3,
-      updatedLogicalMonitors,
-      configProperties,
-    ]);
+    if (!this.canApplyMonitorsConfig()) {
+      console.error('Cannot apply monitor configuration changes.');
+      return false;
+    }
 
-    return new Promise((resolve) => {
-      this.proxy.call(
-        'ApplyMonitorsConfig',
-        params,
-        Gio.DBusCallFlags.NONE,
-        -1,
-        null,
-        (applyProxy: any, applyResult: any) => {
-          try {
-            applyProxy.call_finish(applyResult);
-            resolve(true);
-          } catch (error) {
-            console.error('Failed to set primary monitor:', error);
-            resolve(false);
-          }
-        }
-      );
-    });
+    const state = await this.getCurrentState();
+    if (!state) {
+      return false;
+    }
+
+    const targetModeId = this.getModeIdForRefreshRate(this.getModesForConnector(state.monitors, connector), refreshRate);
+    if (!targetModeId) {
+      console.error(`No mode found for connector ${connector} at ${refreshRate} Hz.`);
+      return false;
+    }
+
+    const modeByConnector = this.getCurrentModeByConnector(state.monitors);
+    return this.applyMonitorConfiguration(state, modeByConnector, null, new Map([[connector, targetModeId]]));
   }
 
   getExternalConnectors(monitors: any[]): string[] {
@@ -253,6 +207,43 @@ export class DisplayConfigClient {
     }
 
     return entries;
+  }
+
+  getRefreshRateOptions(monitors: any[], connector: string): RefreshRateOption[] {
+    const rawModes = this.getModesForConnector(monitors, connector);
+    if (rawModes.length === 0) {
+      return [];
+    }
+
+    const currentModeId = this.getModeIdForMonitor(rawModes);
+    const modes = this.getMonitorModeEntries(rawModes);
+    const groupedModes = new Map<number, MonitorModeEntry[]>();
+
+    for (const mode of modes) {
+      const normalizedRefreshRate = this.normalizeRefreshRate(mode.refreshRate);
+      const existing = groupedModes.get(normalizedRefreshRate);
+      if (existing) {
+        existing.push(mode);
+      } else {
+        groupedModes.set(normalizedRefreshRate, [mode]);
+      }
+    }
+
+    return Array.from(groupedModes.entries())
+      .sort(([left], [right]) => left - right)
+      .map(([refreshRate, options]) => {
+        const selectedMode =
+          options.find((option) => option.id === currentModeId) ||
+          options.find((option) => option.isCurrent) ||
+          options.find((option) => option.isPreferred) ||
+          options[0];
+
+        return {
+          refreshRate,
+          label: `${refreshRate} Hz`,
+          isCurrent: selectedMode?.id === currentModeId,
+        };
+      });
   }
 
   getPrimaryConnector(logicalMonitors: any[], primaryMonitor?: any): string | null {
@@ -316,6 +307,41 @@ export class DisplayConfigClient {
     return modeByConnector;
   }
 
+  private getModesForConnector(monitors: any[], connector: string): any[] {
+    const monitor = (monitors || []).find((entry: any) => {
+      const [monitorInfo] = entry || [];
+      return Array.isArray(monitorInfo) && monitorInfo[0] === connector;
+    });
+
+    if (!monitor) {
+      return [];
+    }
+
+    const [, modes] = monitor;
+    return modes || [];
+  }
+
+  private getMonitorModeEntries(modes: any[]): MonitorModeEntry[] {
+    return (modes || [])
+      .map((mode: any) => {
+        const modeId = mode?.[0];
+        const refreshRate = Number(mode?.[3]);
+        const properties = mode?.[6];
+
+        if (!modeId || !Number.isFinite(refreshRate)) {
+          return null;
+        }
+
+        return {
+          id: String(modeId),
+          refreshRate,
+          isCurrent: this.getPropertyValue(properties, 'is-current') === true,
+          isPreferred: this.getPropertyValue(properties, 'is-preferred') === true,
+        } satisfies MonitorModeEntry;
+      })
+      .filter((mode: MonitorModeEntry | null): mode is MonitorModeEntry => mode !== null);
+  }
+
   private getModeIdForMonitor(modes: any[]): string | null {
     for (const mode of modes || []) {
       const modeId = mode[0];
@@ -337,6 +363,139 @@ export class DisplayConfigClient {
       return modes[0][0];
     }
     return null;
+  }
+
+  private getModeIdForRefreshRate(modes: any[], refreshRate: number): string | null {
+    const normalizedRefreshRate = this.normalizeRefreshRate(refreshRate);
+    const availableModes = this.getMonitorModeEntries(modes);
+    if (availableModes.length === 0) {
+      return null;
+    }
+
+    const matchingModes = availableModes.filter(
+      (mode) => this.normalizeRefreshRate(mode.refreshRate) === normalizedRefreshRate
+    );
+    if (matchingModes.length === 0) {
+      return null;
+    }
+
+    const currentModeId = this.getModeIdForMonitor(modes);
+    const selectedMode =
+      matchingModes.find((mode) => mode.id === currentModeId) ||
+      matchingModes.find((mode) => mode.isCurrent) ||
+      matchingModes.find((mode) => mode.isPreferred) ||
+      matchingModes[0];
+
+    return selectedMode?.id || null;
+  }
+
+  private normalizeRefreshRate(refreshRate: number): number {
+    return Math.round(refreshRate);
+  }
+
+  private async applyMonitorConfiguration(
+    state: DisplayConfigState,
+    modeByConnector: Map<string, string>,
+    primaryConnector: string | null,
+    overrides: Map<string, string>
+  ): Promise<boolean> {
+    const updatedLogicalMonitors: any[] = [];
+    let foundTarget = overrides.size === 0 && primaryConnector === null;
+
+    for (const logicalMonitor of state.logicalMonitors || []) {
+      const [x, y, scale, transform, isPrimary, monitors] = logicalMonitor;
+      const updatedMonitors: any[] = [];
+
+      for (const monitor of monitors || []) {
+        const { connectorName, monitorProperties } = this.getConnectorFromMonitor(monitor);
+        if (!connectorName) {
+          console.error('Could not determine connector name from monitor:', monitor);
+          return false;
+        }
+
+        const modeId = overrides.get(connectorName) || modeByConnector.get(connectorName);
+        if (!modeId) {
+          console.error(`No available mode for connector ${connectorName}.`);
+          return false;
+        }
+
+        if (overrides.has(connectorName)) {
+          foundTarget = true;
+        }
+
+        if (primaryConnector && connectorName === primaryConnector) {
+          foundTarget = true;
+        }
+
+        updatedMonitors.push([connectorName, modeId, monitorProperties]);
+      }
+
+      const newIsPrimary = primaryConnector
+        ? this.logicalMonitorContainsConnector(monitors, primaryConnector)
+        : isPrimary;
+
+      updatedLogicalMonitors.push([x, y, scale, transform, newIsPrimary, updatedMonitors]);
+    }
+
+    if (!foundTarget) {
+      if (primaryConnector) {
+        console.error(`Connector ${primaryConnector} not found.`);
+      } else {
+        console.error('No matching monitor mode override was applied.');
+      }
+      return false;
+    }
+
+    const configProperties = this.getApplyConfigProperties(state.properties);
+    const params = new GLib.Variant('(uua(iiduba(ssa{sv}))a{sv})', [
+      state.serial,
+      3,
+      updatedLogicalMonitors,
+      configProperties,
+    ]);
+
+    return new Promise((resolve) => {
+      this.proxy!.call(
+        'ApplyMonitorsConfig',
+        params,
+        Gio.DBusCallFlags.NONE,
+        -1,
+        null,
+        (applyProxy: any, applyResult: any) => {
+          try {
+            applyProxy.call_finish(applyResult);
+            resolve(true);
+          } catch (error) {
+            console.error('Failed to apply monitor configuration:', error);
+            resolve(false);
+          }
+        }
+      );
+    });
+  }
+
+  private getConnectorFromMonitor(monitor: any): { connectorName: string; monitorProperties: any } {
+    let connectorName = '';
+    let monitorProperties: any = {};
+
+    if (Array.isArray(monitor)) {
+      if (Array.isArray(monitor[0])) {
+        connectorName = monitor[0][0];
+      } else {
+        connectorName = monitor[0];
+      }
+    } else if (typeof monitor === 'string') {
+      connectorName = monitor;
+    }
+
+    return { connectorName, monitorProperties };
+  }
+
+  private logicalMonitorContainsConnector(monitors: any[], connector: string): boolean {
+    return (monitors || []).some((monitor: any) => {
+      const { connectorName } = this.getConnectorFromMonitor(monitor);
+      return connectorName === connector;
+    });
   }
 
   private getApplyConfigProperties(properties: any): Record<string, GLibVariant> {

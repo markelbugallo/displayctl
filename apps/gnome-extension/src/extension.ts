@@ -32,6 +32,7 @@ export default class DisplayctlExtension extends Extension {
     this.indicatorMenu = new IndicatorMenu(icon, {
       onBrightnessChanged: (value) => { void this._onBrightnessSliderChanged(value); },
       onPrimaryMonitorSelected: (connector) => { void this._applyPrimaryMonitor(connector); },
+      onRefreshRateSelected: (refreshRate) => { void this._applyRefreshRate(refreshRate); },
       onMenuOpen: () => { void this._refreshState(); },
     });
     this.indicatorMenu.attachToPanel();
@@ -64,6 +65,7 @@ export default class DisplayctlExtension extends Extension {
       this.indicatorMenu = null;
     }
 
+    this.ddcController.clear();
     this.overlayManager.clearOverlays();
     this._softwareBrightness.clear();
     this._monitors = [];
@@ -138,6 +140,7 @@ export default class DisplayctlExtension extends Extension {
       const primary = this.displayConfig.getPrimaryConnector(this._logicalMonitors, Main.layoutManager.primaryMonitor);
       const canApply = this.displayConfig.canApplyMonitorsConfig();
       this.indicatorMenu.updatePrimaryMonitorMenu(entries, primary, canApply);
+      this._updateRefreshRateMenu(canApply);
 
       if (this.ddcController.isBusy()) {
         return;
@@ -254,10 +257,37 @@ export default class DisplayctlExtension extends Extension {
 
   private async _applyPrimaryMonitor(connector: string) {
     if (!this.displayConfig) return;
-    const ok = await this.displayConfig.applyPrimaryMonitor(connector);
+    const ok = await this.displayConfig.setPrimaryMonitor(connector);
     if (ok) {
       void this._refreshState();
     }
+  }
+
+  private async _applyRefreshRate(refreshRate: number) {
+    try {
+      if (!this.displayConfig || this._externalConnectors.length === 0) return;
+      const connector = this._externalConnectors[0];
+      const ok = await this.displayConfig.applyMonitorRefreshRate(connector, refreshRate);
+      if (ok) {
+        void this._refreshState();
+      }
+    } catch (err: any) {
+      console.error('[displayctl] Error inside _applyRefreshRate:', err, err?.stack);
+    }
+  }
+
+  private _updateRefreshRateMenu(canApply: boolean) {
+    if (!this.indicatorMenu || !this.displayConfig || this._externalConnectors.length === 0) {
+      if (this.indicatorMenu) {
+        this.indicatorMenu.updateRefreshRateMenu(null, [], false);
+      }
+      return;
+    }
+
+    const connector = this._externalConnectors[0];
+    const options = this.displayConfig.getRefreshRateOptions(this._monitors, connector);
+    const currentLabel = options.find((option) => option.isCurrent)?.label ?? null;
+    this.indicatorMenu.updateRefreshRateMenu(currentLabel, options, canApply);
   }
 
   private _getPropertyValue(properties: any, key: string): any {
