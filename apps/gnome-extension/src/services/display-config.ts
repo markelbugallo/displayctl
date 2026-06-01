@@ -8,6 +8,8 @@ export type MonitorModeEntry = {
   refreshRate: number;
   isCurrent: boolean;
   isPreferred: boolean;
+  width: number;
+  height: number;
 };
 
 export type RefreshRateOption = {
@@ -156,9 +158,28 @@ export class DisplayConfigClient {
       return false;
     }
 
-    const targetModeId = this.getModeIdForRefreshRate(this.getModesForConnector(state.monitors, connector), refreshRate);
+    const rawModes = this.getModesForConnector(state.monitors, connector);
+    const currentMode = rawModes.find((m) => {
+      const properties = m[6];
+      return this.getPropertyValue(properties, 'is-current') === true;
+    }) || rawModes[0];
+
+    if (!currentMode) {
+      console.error(`No current mode found for connector ${connector}.`);
+      return false;
+    }
+
+    const currentWidth = Number(currentMode[1]);
+    const currentHeight = Number(currentMode[2]);
+
+    const targetModeId = this.getModeIdForRefreshRateAndResolution(
+      rawModes,
+      refreshRate,
+      currentWidth,
+      currentHeight
+    );
     if (!targetModeId) {
-      console.error(`No mode found for connector ${connector} at ${refreshRate} Hz.`);
+      console.error(`No mode found for connector ${connector} at ${refreshRate} Hz with resolution ${currentWidth}x${currentHeight}.`);
       return false;
     }
 
@@ -215,8 +236,20 @@ export class DisplayConfigClient {
       return [];
     }
 
+    const currentMode = rawModes.find((m) => {
+      const properties = m[6];
+      return this.getPropertyValue(properties, 'is-current') === true;
+    }) || rawModes[0];
+
+    const currentWidth = currentMode ? Number(currentMode[1]) : 0;
+    const currentHeight = currentMode ? Number(currentMode[2]) : 0;
+
     const currentModeId = this.getModeIdForMonitor(rawModes);
-    const modes = this.getMonitorModeEntries(rawModes);
+    const allModes = this.getMonitorModeEntries(rawModes);
+    
+    // Filter to only modes with the current resolution
+    const modes = allModes.filter((m) => m.width === currentWidth && m.height === currentHeight);
+
     const groupedModes = new Map<number, MonitorModeEntry[]>();
 
     for (const mode of modes) {
@@ -325,6 +358,8 @@ export class DisplayConfigClient {
     return (modes || [])
       .map((mode: any) => {
         const modeId = mode?.[0];
+        const width = Number(mode?.[1]);
+        const height = Number(mode?.[2]);
         const refreshRate = Number(mode?.[3]);
         const properties = mode?.[6];
 
@@ -334,6 +369,8 @@ export class DisplayConfigClient {
 
         return {
           id: String(modeId),
+          width,
+          height,
           refreshRate,
           isCurrent: this.getPropertyValue(properties, 'is-current') === true,
           isPreferred: this.getPropertyValue(properties, 'is-preferred') === true,
@@ -374,6 +411,38 @@ export class DisplayConfigClient {
 
     const matchingModes = availableModes.filter(
       (mode) => this.normalizeRefreshRate(mode.refreshRate) === normalizedRefreshRate
+    );
+    if (matchingModes.length === 0) {
+      return null;
+    }
+
+    const currentModeId = this.getModeIdForMonitor(modes);
+    const selectedMode =
+      matchingModes.find((mode) => mode.id === currentModeId) ||
+      matchingModes.find((mode) => mode.isCurrent) ||
+      matchingModes.find((mode) => mode.isPreferred) ||
+      matchingModes[0];
+
+    return selectedMode?.id || null;
+  }
+
+  private getModeIdForRefreshRateAndResolution(
+    modes: any[],
+    refreshRate: number,
+    width: number,
+    height: number
+  ): string | null {
+    const normalizedRefreshRate = this.normalizeRefreshRate(refreshRate);
+    const availableModes = this.getMonitorModeEntries(modes);
+    if (availableModes.length === 0) {
+      return null;
+    }
+
+    const matchingModes = availableModes.filter(
+      (mode) =>
+        mode.width === width &&
+        mode.height === height &&
+        this.normalizeRefreshRate(mode.refreshRate) === normalizedRefreshRate
     );
     if (matchingModes.length === 0) {
       return null;

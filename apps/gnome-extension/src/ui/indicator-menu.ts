@@ -185,6 +185,7 @@ export class IndicatorMenu {
     this.indicator.menu.addMenuItem(this.brightnessLabelItem);
 
     this.indicator.menu.addMenuItem(this.refreshRateMenu!.item);
+    this.refreshRateMenu!.setParentMenu(this.indicator.menu);
 
     const hasPopupSlider = typeof (PopupMenu as any).PopupSliderMenuItem === 'function';
     if (hasPopupSlider) {

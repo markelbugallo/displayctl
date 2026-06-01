@@ -1,4 +1,6 @@
+import Clutter from 'gi://Clutter';
 import St from 'gi://St';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import type { RefreshRateOption } from '../services/display-config.js';
@@ -10,117 +12,92 @@ type RefreshRateMenuHandlers = {
 export class RefreshRateMenu {
   private readonly root: any;
   private readonly handlers: RefreshRateMenuHandlers;
+  private readonly dropdownBox: any;
+  private readonly dropdownLabel: any;
+  private readonly dropdownArrow: any;
+  private readonly menu: any;
+  private readonly menuManager: any;
+  private parentMenu: any = null;
 
   constructor(handlers: RefreshRateMenuHandlers) {
     this.handlers = handlers;
-    // Use a standard sub-menu item but intercept clicks so only the right side opens the submenu
-    this.root = new PopupMenu.PopupSubMenuMenuItem('Tasa de refresco');
 
-    const isDescendantOf = (child: any, parent: any): boolean => {
-      if (!child || !parent) return false;
-      if (child === parent) return true;
-      if (typeof parent.contains === 'function') {
-        try {
-          return parent.contains(child);
-        } catch (e) {
-          // fallback
-        }
-      }
-      let current = child;
-      while (current) {
-        if (current === parent) return true;
-        current = current.get_parent ? current.get_parent() : null;
-      }
-      return false;
-    };
+    // Use a flat PopupBaseMenuItem instead of PopupSubMenuMenuItem
+    this.root = new PopupMenu.PopupBaseMenuItem({
+      activate: false,
+      reactive: true,
+      can_focus: true,
+    });
 
     try {
-      // Enable markup support on the label for beautiful rich styling
-      const label = this.root.label as any;
-      if (label && label.clutter_text) {
-        label.clutter_text.use_markup = true;
-      }
+      // 1. Static/fixed label on the left (matches original design but now fixed)
+      const label = new St.Label({
+        text: 'Tasa de refresco',
+        y_align: Clutter.ActorAlign.CENTER,
+        x_expand: true,
+      });
+      this.root.add_child(label);
 
-      // Override the standard activate method to do nothing,
-      // completely preventing the row click from opening the submenu
-      this.root.activate = (event: any) => {
-        // no-op
-      };
+      // 2. Styled dropdown button/box on the right
+      this.dropdownBox = new St.BoxLayout({
+        style_class: 'button',
+        style: 'padding: 4px 8px; border-radius: 6px; spacing: 6px;',
+        reactive: true,
+        can_focus: true,
+        track_hover: true,
+      });
 
-      // Keep the menu item reactive to intercept clicks on the right side
-      const menuActor = (this.root.actor || this.root) as any;
-      if (menuActor) {
-        menuActor.reactive = true;
+      this.dropdownLabel = new St.Label({
+        text: '--- Hz',
+        y_align: Clutter.ActorAlign.CENTER,
+      });
+      this.dropdownBox.add_child(this.dropdownLabel);
 
-        const handleEvent = (actor: any, event: any) => {
-          try {
-            const source = event.get_source ? event.get_source() : null;
-            if (source && this.root.menu && this.root.menu.actor && isDescendantOf(source, this.root.menu.actor)) {
-              return false;
-            }
+      this.dropdownArrow = new St.Icon({
+        icon_name: 'pan-down-symbolic',
+        style_class: 'popup-menu-arrow',
+      });
+      this.dropdownBox.add_child(this.dropdownArrow);
 
-            // Get stage coordinates of the click
-            const [stageX] = event.get_coords();
+      this.root.add_child(this.dropdownBox);
 
-            // Determine actor position and width on stage using robust fallback mechanism
-            let actorX = 0;
-            let actorWidth = actor.get_width ? actor.get_width() : 0;
+      // 3. Floating PopupMenu anchored to the dropdownBox
+      this.menu = new PopupMenu.PopupMenu(this.dropdownBox, 0.5, St.Side.TOP);
+      this.menu.actor.name = 'displayctl-refresh-rate-popup';
+      this.menu.actor.visible = false;
+      
+      // Add menu actor to UI Group
+      Main.uiGroup.add_child(this.menu.actor);
 
-            if (typeof actor.get_transformed_position === 'function') {
-              const pos = actor.get_transformed_position();
-              if (pos && pos.length > 0) {
-                actorX = pos[0];
-              }
-            } else {
-              const allocation = actor.get_allocation_box ? actor.get_allocation_box() : actor.get_allocation();
-              const extents = allocation.get_extents ? allocation.get_extents() : allocation;
-              actorX = extents.x || 0;
-            }
+      // Register the menu in a PopupMenuManager to handle click outside
+      this.menuManager = new PopupMenu.PopupMenuManager(this.dropdownBox);
+      this.menuManager.addMenu(this.menu);
 
-            if (typeof actor.get_transformed_size === 'function') {
-              const size = actor.get_transformed_size();
-              if (size && size.length > 0) {
-                actorWidth = size[0];
-              }
-            } else {
-              const allocation = actor.get_allocation_box ? actor.get_allocation_box() : actor.get_allocation();
-              const extents = allocation.get_extents ? allocation.get_extents() : allocation;
-              actorWidth = extents.width || (actor.get_width ? actor.get_width() : 0);
-            }
+      // Connect click/button-press to toggle the menu
+      this.dropdownBox.connect('button-press-event', (actor: any, event: any) => {
+        if (event.get_button() !== 1) {
+          return Clutter.EVENT_PROPAGATE;
+        }
+        if (this.parentMenu && this.parentMenu.isOpen) {
+          this.menu.toggle();
+        }
+        return Clutter.EVENT_STOP;
+      });
 
-            const localX = stageX - actorX;
+      // Prevent button-release propagation on left-click to avoid activation side-effects
+      this.dropdownBox.connect('button-release-event', (actor: any, event: any) => {
+        if (event.get_button() === 1) {
+          return Clutter.EVENT_STOP;
+        }
+        return Clutter.EVENT_PROPAGATE;
+      });
 
-            // If clicked on the right side (where the active value and arrow are), toggle submenu.
-            // Using actorWidth - 140 covers the right area perfectly.
-            if (localX >= actorWidth - 140) {
-              if (this.root.menu) {
-                this.root.menu.toggle();
-              }
-            }
-          } catch (e) {
-            console.error('[displayctl] refresh-rate-menu: event handler error: ' + e);
-          }
-
-          // Stop propagation to prevent default activation behavior
-          return true;
-        };
-
-        const handleOtherEvent = (actor: any, event: any) => {
-          try {
-            const source = event.get_source ? event.get_source() : null;
-            if (source && this.root.menu && this.root.menu.actor && isDescendantOf(source, this.root.menu.actor)) {
-              return false;
-            }
-          } catch (e) {
-            console.error('[displayctl] refresh-rate-menu: event handler error: ' + e);
-          }
-          return true;
-        };
-
-        menuActor.connect('button-press-event', handleEvent);
-        menuActor.connect('button-release-event', handleOtherEvent);
-        menuActor.connect('touch-event', handleOtherEvent);
-      }
+      // Cleanup floating menu on destroy to prevent memory leaks in Main.uiGroup
+      this.root.connect('destroy', () => {
+        if (this.menu) {
+          this.menu.destroy();
+        }
+      });
     } catch (e) {
       console.error('[displayctl] refresh-rate-menu: construction error: ' + e);
     }
@@ -130,26 +107,35 @@ export class RefreshRateMenu {
     return this.root;
   }
 
-  public update(currentLabel: string | null, options: RefreshRateOption[], canApply: boolean): void {
-    this.root.menu.removeAll();
-
-    // Update the main row label with the current active rate
-    const label = this.root.label as any;
-    if (label && label.clutter_text) {
-      if (currentLabel) {
-        label.clutter_text.set_markup(
-          `Tasa de refresco: <span color="#999999">${currentLabel}</span>`
-        );
-      } else {
-        label.clutter_text.set_markup('Tasa de refresco');
+  public setParentMenu(parentMenu: any): void {
+    this.parentMenu = parentMenu;
+    this.parentMenu.connect('open-state-changed', (menu: any, isOpen: boolean) => {
+      if (!isOpen && this.menu) {
+        this.menu.close();
       }
+    });
+  }
+
+  public update(currentLabel: string | null, options: RefreshRateOption[], canApply: boolean): void {
+    // Ensure the Hz menu is closed if the parent menu is closed
+    if (this.parentMenu && !this.parentMenu.isOpen && this.menu.isOpen) {
+      this.menu.close();
+    }
+
+    this.menu.removeAll();
+
+    // Update the dropdown label text with the active rate
+    if (this.dropdownLabel) {
+      this.dropdownLabel.text = currentLabel || '--- Hz';
     }
 
     if (!options || options.length === 0) {
       const emptyItem = new PopupMenu.PopupMenuItem('No hay tasas disponibles');
       emptyItem.setSensitive(false);
-      this.root.menu.addMenuItem(emptyItem);
-      this.root.setSensitive(false);
+      this.menu.addMenuItem(emptyItem);
+      this.dropdownBox.reactive = false;
+      this.dropdownBox.track_hover = false;
+      this.dropdownBox.opacity = 128;
       return;
     }
 
@@ -158,11 +144,14 @@ export class RefreshRateMenu {
       item.setOrnament(option.isCurrent ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NONE);
       item.connect('activate', () => {
         this.handlers.onRefreshRateSelected(option.refreshRate);
+        this.menu.close();
       });
-      this.root.menu.addMenuItem(item);
+      this.menu.addMenuItem(item);
     }
 
+    this.dropdownBox.reactive = canApply;
+    this.dropdownBox.track_hover = canApply;
+    this.dropdownBox.opacity = canApply ? 255 : 128;
     this.root.setSensitive(canApply);
   }
 }
-

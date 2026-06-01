@@ -5,7 +5,12 @@
     "rootDir": "../..",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2022"]
+    "lib": [
+      "ES2022"
+    ],
+    "ignoreDeprecations": "6.0"
   },
-  "include": ["src/**/*"]
+  "include": [
+    "src/**/*"
+  ]
 }

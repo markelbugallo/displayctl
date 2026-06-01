@@ -28,6 +28,8 @@ export default class DisplayctlExtension extends Extension {
   private _monitorsChangedId: number | null = null;
 
   enable() {
+    this._cleanOrphanMenus();
+
     const icon = this._createIndicatorIcon();
     this.indicatorMenu = new IndicatorMenu(icon, {
       onBrightnessChanged: (value) => { void this._onBrightnessSliderChanged(value); },
@@ -48,25 +50,103 @@ export default class DisplayctlExtension extends Extension {
     );
   }
 
+  private _cleanOrphanMenus() {
+    try {
+      const children = Main.uiGroup.get_children();
+      if (!Array.isArray(children)) return;
+
+      children.forEach((child: any) => {
+        if (!child) return;
+
+        // Clean up identified popup menus
+        if (child.name === 'displayctl-refresh-rate-popup') {
+          try {
+            console.log('[displayctl] Destroying identified refresh rate popup');
+            child.destroy();
+          } catch (e) {}
+          return;
+        }
+
+        // Clean up older unnamed orphan popup menus by scanning their labels
+        if (this._hasHzLabel(child)) {
+          try {
+            console.log('[displayctl] Destroying unnamed orphan refresh rate menu:', child);
+            child.destroy();
+          } catch (e) {
+            console.error('[displayctl] Failed to destroy unnamed orphan menu:', e);
+          }
+        }
+      });
+    } catch (e) {
+      console.error('[displayctl] Error during _cleanOrphanMenus execution:', e);
+    }
+  }
+
+  private _hasHzLabel(actor: any): boolean {
+    if (!actor) return false;
+
+    if (typeof actor.get_text === 'function') {
+      const text = actor.get_text();
+      if (text && (text.includes('Hz') || text.includes('Tasa de refresco'))) {
+        return true;
+      }
+    }
+
+    if (typeof actor.get_children === 'function') {
+      const children = actor.get_children();
+      if (Array.isArray(children)) {
+        for (const child of children) {
+          if (this._hasHzLabel(child)) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
   disable() {
     if (this._monitorsChangedId && this._monitorsChangedEmitter) {
-      this._monitorsChangedEmitter.disconnect(this._monitorsChangedId);
+      try {
+        this._monitorsChangedEmitter.disconnect(this._monitorsChangedId);
+      } catch (err) {
+        console.error('[displayctl] Error disconnecting monitors-changed listener:', err);
+      }
       this._monitorsChangedId = null;
       this._monitorsChangedEmitter = null;
     }
 
     if (this.displayConfig) {
-      this.displayConfig.destroy();
+      try {
+        this.displayConfig.destroy();
+      } catch (err) {
+        console.error('[displayctl] Error destroying displayConfig:', err);
+      }
       this.displayConfig = null;
     }
 
     if (this.indicatorMenu) {
-      this.indicatorMenu.destroy();
+      try {
+        this.indicatorMenu.destroy();
+      } catch (err) {
+        console.error('[displayctl] Error destroying indicatorMenu:', err);
+      }
       this.indicatorMenu = null;
     }
 
-    this.ddcController.clear();
-    this.overlayManager.clearOverlays();
+    try {
+      this.ddcController.clear();
+    } catch (err) {
+      console.error('[displayctl] Error clearing ddcController:', err);
+    }
+
+    try {
+      this.overlayManager.clearOverlays();
+    } catch (err) {
+      console.error('[displayctl] Error clearing overlays:', err);
+    }
+
     this._softwareBrightness.clear();
     this._monitors = [];
     this._logicalMonitors = [];
