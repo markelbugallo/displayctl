@@ -3,6 +3,7 @@ import GLib from 'gi://GLib';
 import { IDisplayController, MonitorInfo, BacklightState } from '@displayctl/core';
 
 export class DdcutilController implements IDisplayController {
+  private _isDdcutilAvailable: boolean | null = null;
   private isRunning = false;
   private ddcBusCache = new Map<string, number>();
   private targetBrightnessMap = new Map<string, number>();
@@ -17,7 +18,10 @@ export class DdcutilController implements IDisplayController {
 
   //Checks if `ddcutil` command-line tool is installed in the system path.
   public isDdcutilAvailable(): boolean {
-    return GLib.find_program_in_path('ddcutil') !== null;
+    if (this._isDdcutilAvailable === null) {
+      this._isDdcutilAvailable = GLib.find_program_in_path('ddcutil') !== null;
+    }
+    return this._isDdcutilAvailable;
   }
 
   /**

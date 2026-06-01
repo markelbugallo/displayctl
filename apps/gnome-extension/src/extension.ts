@@ -26,6 +26,7 @@ export default class DisplayctlExtension extends Extension {
 
   private _monitorsChangedEmitter: any = null;
   private _monitorsChangedId: number | null = null;
+  private _startupTimeoutId: number | null = null;
 
   enable() {
     this._cleanOrphanMenus();
@@ -35,18 +36,29 @@ export default class DisplayctlExtension extends Extension {
       onBrightnessChanged: (value) => { void this._onBrightnessSliderChanged(value); },
       onPrimaryMonitorSelected: (connector) => { void this._applyPrimaryMonitor(connector); },
       onRefreshRateSelected: (refreshRate) => { void this._applyRefreshRate(refreshRate); },
-      onMenuOpen: () => { void this._refreshState(); },
+      onMenuOpen: () => { void this._refreshState(false); },
     });
     this.indicatorMenu.attachToPanel();
 
     this.displayConfig = new DisplayConfigClient();
     this.displayConfig.createProxy(() => {
-      void this._refreshState();
+      void this._refreshState(true);
+
+      // Defer heavy hardware detection to allow login/startup to settle
+      this._startupTimeoutId = GLib.timeout_add_seconds(
+        GLib.PRIORITY_DEFAULT,
+        5,
+        () => {
+          void this._refreshState(false);
+          this._startupTimeoutId = null;
+          return GLib.SOURCE_REMOVE;
+        }
+      );
     });
 
     this._monitorsChangedEmitter = Main.layoutManager;
     this._monitorsChangedId = this._monitorsChangedEmitter.connect('monitors-changed',
-      () => { void this._refreshState(); }
+      () => { void this._refreshState(false); }
     );
   }
 
@@ -64,17 +76,6 @@ export default class DisplayctlExtension extends Extension {
             console.log('[displayctl] Destroying identified refresh rate popup');
             child.destroy();
           } catch (e) {}
-          return;
-        }
-
-        // Clean up older unnamed orphan popup menus by scanning their labels
-        if (this._hasHzLabel(child)) {
-          try {
-            console.log('[displayctl] Destroying unnamed orphan refresh rate menu:', child);
-            child.destroy();
-          } catch (e) {
-            console.error('[displayctl] Failed to destroy unnamed orphan menu:', e);
-          }
         }
       });
     } catch (e) {
@@ -82,31 +83,16 @@ export default class DisplayctlExtension extends Extension {
     }
   }
 
-  private _hasHzLabel(actor: any): boolean {
-    if (!actor) return false;
-
-    if (typeof actor.get_text === 'function') {
-      const text = actor.get_text();
-      if (text && (text.includes('Hz') || text.includes('Tasa de refresco'))) {
-        return true;
-      }
-    }
-
-    if (typeof actor.get_children === 'function') {
-      const children = actor.get_children();
-      if (Array.isArray(children)) {
-        for (const child of children) {
-          if (this._hasHzLabel(child)) {
-            return true;
-          }
-        }
-      }
-    }
-
-    return false;
-  }
-
   disable() {
+    if (this._startupTimeoutId) {
+      try {
+        GLib.Source.remove(this._startupTimeoutId);
+      } catch (err) {
+        console.error('[displayctl] Error removing startup timeout:', err);
+      }
+      this._startupTimeoutId = null;
+    }
+
     if (this._monitorsChangedId && this._monitorsChangedEmitter) {
       try {
         this._monitorsChangedEmitter.disconnect(this._monitorsChangedId);
@@ -200,8 +186,15 @@ export default class DisplayctlExtension extends Extension {
     return null;
   }
 
-  private async _refreshState() {
+  private async _refreshState(skipDdc = false) {
     if (!this.displayConfig || !this.indicatorMenu) return;
+
+    if (!skipDdc && this._startupTimeoutId) {
+      try {
+        GLib.Source.remove(this._startupTimeoutId);
+      } catch (e) {}
+      this._startupTimeoutId = null;
+    }
 
     try {
       const state = await this.displayConfig.getCurrentState();
@@ -221,6 +214,11 @@ export default class DisplayctlExtension extends Extension {
       const canApply = this.displayConfig.canApplyMonitorsConfig();
       this.indicatorMenu.updatePrimaryMonitorMenu(entries, primary, canApply);
       this._updateRefreshRateMenu(canApply);
+
+      if (skipDdc) {
+        this.overlayManager.updateOverlays(this._externalConnectors, this._softwareBrightness, this._logicalMonitors, undefined);
+        return;
+      }
 
       if (this.ddcController.isBusy()) {
         return;
