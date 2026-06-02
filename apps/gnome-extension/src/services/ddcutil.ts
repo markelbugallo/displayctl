@@ -4,7 +4,9 @@ import { IDisplayController, MonitorInfo, BacklightState } from '@displayctl/cor
 
 export class DdcutilController implements IDisplayController {
   private _isDdcutilAvailable: boolean | null = null;
-  private isRunning = false;
+  private commandQueue: (() => Promise<any>)[] = [];
+  private isProcessingQueue = false;
+  private isWritePending = false;
   private ddcBusCache = new Map<string, number>();
   private targetBrightnessMap = new Map<string, number>();
   private currentBrightnessMap = new Map<string, number>();
@@ -13,7 +15,40 @@ export class DdcutilController implements IDisplayController {
   private lastReadValue = new Map<string, BacklightState>();
 
   public isBusy(): boolean {
-    return this.isRunning;
+    return this.isProcessingQueue || this.commandQueue.length > 0;
+  }
+
+  private async enqueue<T>(task: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.commandQueue.push(async () => {
+        try {
+          const result = await task();
+          resolve(result);
+        } catch (err) {
+          reject(err);
+        }
+      });
+      void this.processQueue();
+    });
+  }
+
+  private async processQueue(): Promise<void> {
+    if (this.isProcessingQueue) {
+      return;
+    }
+    this.isProcessingQueue = true;
+    try {
+      while (this.commandQueue.length > 0) {
+        const task = this.commandQueue.shift()!;
+        try {
+          await task();
+        } catch (err) {
+          console.error('[displayctl] Command queue task failed:', err);
+        }
+      }
+    } finally {
+      this.isProcessingQueue = false;
+    }
   }
 
   //Checks if `ddcutil` command-line tool is installed in the system path.
@@ -30,7 +65,7 @@ export class DdcutilController implements IDisplayController {
    * @param externalConnectors List of active external connectors detected via Mutter
    */
   public async detectDdcBuses(externalConnectors: string[]): Promise<Map<string, number>> {
-    if (!this.isDdcutilAvailable() || this.isRunning || externalConnectors.length === 0) {
+    if (!this.isDdcutilAvailable() || externalConnectors.length === 0) {
       return this.ddcBusCache;
     }
 
@@ -46,48 +81,47 @@ export class DdcutilController implements IDisplayController {
       return this.ddcBusCache;
     }
 
-    this.isRunning = true;
-    return new Promise((resolve) => {
-      try {
-        const proc = new Gio.Subprocess({
-          argv: ['ddcutil', 'detect', '--brief', '--skip-ddc-checks'],
-          flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENT,
-        });
-        proc.init(null);
+    return this.enqueue(async () => {
+      return new Promise<Map<string, number>>((resolve) => {
+        try {
+          const proc = new Gio.Subprocess({
+            argv: ['ddcutil', 'detect', '--brief', '--skip-ddc-checks'],
+            flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENT,
+          });
+          proc.init(null);
 
-        proc.communicate_utf8_async(null, null, (obj: any, res: any) => {
-          this.isRunning = false;
-          try {
-            const [success, stdout] = obj!.communicate_utf8_finish(res);
-            if (success && stdout) {
-              const ddcDisplays = this.parseDdcutilDetect(stdout);
-              const newCache = new Map<string, number>();
+          proc.communicate_utf8_async(null, null, (obj: any, res: any) => {
+            try {
+              const [success, stdout] = obj!.communicate_utf8_finish(res);
+              if (success && stdout) {
+                const ddcDisplays = this.parseDdcutilDetect(stdout);
+                const newCache = new Map<string, number>();
 
-              for (const conn of externalConnectors) {
-                const matched = this.matchConnectorToDdc(conn, ddcDisplays);
-                if (matched !== null) {
-                  newCache.set(conn, matched.bus);
+                for (const conn of externalConnectors) {
+                  const matched = this.matchConnectorToDdc(conn, ddcDisplays);
+                  if (matched !== null) {
+                    newCache.set(conn, matched.bus);
+                  }
                 }
+                this.ddcBusCache = newCache;
               }
-              this.ddcBusCache = newCache;
+            } catch (e) {
+              console.error('[displayctl] ddcutil detect failed:', e);
             }
-          } catch (e) {
-            console.error('[displayctl] ddcutil detect failed:', e);
-          }
+            resolve(this.ddcBusCache);
+          });
+        } catch (e) {
+          console.error('[displayctl] Failed to launch ddcutil detect:', e);
           resolve(this.ddcBusCache);
-        });
-      } catch (e) {
-        this.isRunning = false;
-        console.error('[displayctl] Failed to launch ddcutil detect:', e);
-        resolve(this.ddcBusCache);
-      }
+        }
+      });
     });
   }
 
 
   // Retrieves the current hardware backlight value via DDC/CI VCP code 10.
   public async getHardwareBrightness(monitor: MonitorInfo): Promise<BacklightState | null> {
-    if (!this.isDdcutilAvailable() || this.isRunning) {
+    if (!this.isDdcutilAvailable()) {
       return null;
     }
 
@@ -99,7 +133,6 @@ export class DdcutilController implements IDisplayController {
       return cachedVal;
     }
 
-    this.isRunning = true;
     const bus = this.ddcBusCache.get(monitor.id);
 
     const argv = ['ddcutil'];
@@ -108,53 +141,53 @@ export class DdcutilController implements IDisplayController {
     }
     argv.push('getvcp', '10', '--brief');
 
-    return new Promise((resolve) => {
-      try {
-        const proc = new Gio.Subprocess({
-          argv: argv,
-          flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENT,
-        });
-        proc.init(null);
+    return this.enqueue(async () => {
+      return new Promise<BacklightState | null>((resolve) => {
+        try {
+          const proc = new Gio.Subprocess({
+            argv: argv,
+            flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENT,
+          });
+          proc.init(null);
 
-        proc.communicate_utf8_async(null, null, (obj: any, res: any) => {
-          this.isRunning = false;
-          try {
-            const [success, stdout] = obj!.communicate_utf8_finish(res);
-            if (success && stdout) {
-              const parsed = this.parseDdcutilGetvcp(stdout);
-              if (parsed) {
-                const { current, max } = parsed;
-                const normalized = current / max;
-                
-                this.currentBrightnessMap.set(monitor.id, normalized);
-                this.targetBrightnessMap.set(monitor.id, normalized);
+          proc.communicate_utf8_async(null, null, (obj: any, res: any) => {
+            try {
+              const [success, stdout] = obj!.communicate_utf8_finish(res);
+              if (success && stdout) {
+                const parsed = this.parseDdcutilGetvcp(stdout);
+                if (parsed) {
+                  const { current, max } = parsed;
+                  const normalized = current / max;
+                  
+                  this.currentBrightnessMap.set(monitor.id, normalized);
+                  this.targetBrightnessMap.set(monitor.id, normalized);
 
-                const state: BacklightState = {
-                  connector: monitor.id,
-                  bus: bus,
-                  min: 0,
-                  max,
-                  value: normalized,
-                  isHardware: true,
-                };
+                  const state: BacklightState = {
+                    connector: monitor.id,
+                    bus: bus,
+                    min: 0,
+                    max,
+                    value: normalized,
+                    isHardware: true,
+                  };
 
-                this.lastReadTime.set(monitor.id, Date.now());
-                this.lastReadValue.set(monitor.id, state);
+                  this.lastReadTime.set(monitor.id, Date.now());
+                  this.lastReadValue.set(monitor.id, state);
 
-                resolve(state);
-                return;
+                  resolve(state);
+                  return;
+                }
               }
+            } catch (e) {
+              console.error('[displayctl] ddcutil getvcp failed:', e);
             }
-          } catch (e) {
-            console.error('[displayctl] ddcutil getvcp failed:', e);
-          }
+            resolve(null);
+          });
+        } catch (e) {
+          console.error('[displayctl] Failed to run ddcutil getvcp:', e);
           resolve(null);
-        });
-      } catch (e) {
-        this.isRunning = false;
-        console.error('[displayctl] Failed to run ddcutil getvcp:', e);
-        resolve(null);
-      }
+        }
+      });
     });
   }
 
@@ -171,53 +204,50 @@ export class DdcutilController implements IDisplayController {
     this.targetBrightnessMap.set(monitor.id, value);
     this.pendingMonitors.set(monitor.id, { monitor, state });
 
-    void this.processQueue();
+    if (!this.isWritePending) {
+      this.isWritePending = true;
+      void this.enqueue(async () => {
+        this.isWritePending = false;
+        await this.executePendingWrites();
+      });
+    }
   }
 
-  private async processQueue(): Promise<void> {
-    if (this.isRunning) {
-      return;
-    }
-    this.isRunning = true;
-
-    try {
-      while (true) {
-        // Find a connector that needs an update
-        let connectorToUpdate: string | null = null;
-        for (const [connector, target] of this.targetBrightnessMap.entries()) {
-          const current = this.currentBrightnessMap.get(connector);
-          if (current !== target) {
-            connectorToUpdate = connector;
-            break;
-          }
-        }
-
-        if (!connectorToUpdate) {
+  private async executePendingWrites(): Promise<void> {
+    while (true) {
+      // Find a connector that needs an update
+      let connectorToUpdate: string | null = null;
+      for (const [connector, target] of this.targetBrightnessMap.entries()) {
+        const current = this.currentBrightnessMap.get(connector);
+        if (current !== target) {
+          connectorToUpdate = connector;
           break;
         }
-
-        const pending = this.pendingMonitors.get(connectorToUpdate);
-        if (!pending) {
-          this.currentBrightnessMap.set(connectorToUpdate, this.targetBrightnessMap.get(connectorToUpdate)!);
-          continue;
-        }
-
-        const { monitor, state } = pending;
-        const target = this.targetBrightnessMap.get(connectorToUpdate)!;
-
-        // Perform the update
-        await this.executeDdcutilSetvcp(monitor, state, target);
-        this.currentBrightnessMap.set(connectorToUpdate, target);
-
-        // Update cache with the new value to keep it warm and avoid immediate re-read
-        const cachedVal = this.lastReadValue.get(connectorToUpdate);
-        if (cachedVal) {
-          cachedVal.value = target;
-          this.lastReadTime.set(connectorToUpdate, Date.now());
-        }
       }
-    } finally {
-      this.isRunning = false;
+
+      if (!connectorToUpdate) {
+        break;
+      }
+
+      const pending = this.pendingMonitors.get(connectorToUpdate);
+      if (!pending) {
+        this.currentBrightnessMap.set(connectorToUpdate, this.targetBrightnessMap.get(connectorToUpdate)!);
+        continue;
+      }
+
+      const { monitor, state } = pending;
+      const target = this.targetBrightnessMap.get(connectorToUpdate)!;
+
+      // Perform the update
+      await this.executeDdcutilSetvcp(monitor, state, target);
+      this.currentBrightnessMap.set(connectorToUpdate, target);
+
+      // Update cache with the new value to keep it warm and avoid immediate re-read
+      const cachedVal = this.lastReadValue.get(connectorToUpdate);
+      if (cachedVal) {
+        cachedVal.value = target;
+        this.lastReadTime.set(connectorToUpdate, Date.now());
+      }
     }
   }
 
@@ -246,7 +276,7 @@ export class DdcutilController implements IDisplayController {
       try {
         const proc = new Gio.Subprocess({
           argv: argv,
-          flags: Gio.SubprocessFlags.NONE,
+          flags: Gio.SubprocessFlags.STDOUT_SILENT | Gio.SubprocessFlags.STDERR_SILENT,
         });
         proc.init(null);
 
@@ -272,6 +302,9 @@ export class DdcutilController implements IDisplayController {
     this.pendingMonitors.clear();
     this.lastReadTime.clear();
     this.lastReadValue.clear();
+    this.commandQueue = [];
+    this.isProcessingQueue = false;
+    this.isWritePending = false;
   }
 
   private parseDdcutilGetvcp(stdout: string): { current: number; max: number } | null {
