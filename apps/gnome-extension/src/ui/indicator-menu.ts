@@ -1,10 +1,8 @@
 import St from 'gi://St';
-
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Slider from 'resource:///org/gnome/shell/ui/slider.js';
-
 import { RefreshRateMenu } from './refresh-rate-menu.js';
 import type { RefreshRateOption } from '../services/display-config.js';
 
@@ -97,7 +95,8 @@ export class IndicatorMenu {
   updatePrimaryMonitorMenu(
     entries: MonitorMenuEntry[],
     primaryConnector: string | null,
-    canApply: boolean
+    canApply: boolean,
+    isLidClosedOnlyExternal: boolean
   ) {
     if (!this.primaryMonitorItem) {
       return;
@@ -114,8 +113,15 @@ export class IndicatorMenu {
       return;
     }
 
-    const primaryLabel =
-      entries.find((entry) => entry.connector === primaryConnector)?.name || 'Desconocido';
+    let primaryLabel = '';
+    if (isLidClosedOnlyExternal) {
+      const externalEntry = entries.find((entry) => {
+        return entry.connector && !entry.connector.startsWith('eDP') && !entry.connector.startsWith('LVDS') && !entry.connector.startsWith('DSI');
+      });
+      primaryLabel = externalEntry ? externalEntry.name : 'Monitor externo';
+    } else {
+      primaryLabel = entries.find((entry) => entry.connector === primaryConnector)?.name || 'Desconocido';
+    }
     this.primaryMonitorItem.label.text = `Monitor principal: ${primaryLabel}`;
 
     for (const entry of entries) {
@@ -126,10 +132,31 @@ export class IndicatorMenu {
       this.primaryMonitorItems.set(entry.connector, item);
     }
 
-    this.primaryMonitorItem.setSensitive(canApply);
+    if (isLidClosedOnlyExternal) {
+      this.primaryMonitorItem.menu.close();
+      this.primaryMonitorItem.setSensitive(true);
+      this.primaryMonitorItem.reactive = false;
+      this.primaryMonitorItem.can_focus = false;
+      if (this.primaryMonitorItem.label) {
+        this.primaryMonitorItem.label.set_style('color: white;');
+      }
+      if (this.primaryMonitorItem._triangle) {
+        this.primaryMonitorItem._triangle.visible = false;
+      }
+    } else {
+      this.primaryMonitorItem.setSensitive(canApply);
+      this.primaryMonitorItem.reactive = canApply;
+      this.primaryMonitorItem.can_focus = canApply;
+      if (this.primaryMonitorItem.label) {
+        this.primaryMonitorItem.label.set_style('');
+      }
+      if (this.primaryMonitorItem._triangle) {
+        this.primaryMonitorItem._triangle.visible = true;
+      }
+    }
   }
 
-  updateDisplayLayoutMenu(currentMode: string, canApply: boolean) {
+  updateDisplayLayoutMenu(currentMode: string, canApply: boolean, isLidClosedOnlyExternal: boolean) {
     if (!this.displayLayoutItem) {
       return;
     }
@@ -158,7 +185,29 @@ export class IndicatorMenu {
       this.displayLayoutItems.set(option.mode, item);
     }
 
-    this.displayLayoutItem.setSensitive(canApply);
+    if (isLidClosedOnlyExternal) {
+      this.displayLayoutItem.label.text = 'Solo externa';
+      this.displayLayoutItem.menu.close();
+      this.displayLayoutItem.setSensitive(true);
+      this.displayLayoutItem.reactive = false;
+      this.displayLayoutItem.can_focus = false;
+      if (this.displayLayoutItem.label) {
+        this.displayLayoutItem.label.set_style('color: white;');
+      }
+      if (this.displayLayoutItem._triangle) {
+        this.displayLayoutItem._triangle.visible = false;
+      }
+    } else {
+      this.displayLayoutItem.setSensitive(canApply);
+      this.displayLayoutItem.reactive = canApply;
+      this.displayLayoutItem.can_focus = canApply;
+      if (this.displayLayoutItem.label) {
+        this.displayLayoutItem.label.set_style('');
+      }
+      if (this.displayLayoutItem._triangle) {
+        this.displayLayoutItem._triangle.visible = true;
+      }
+    }
   }
 
   setBrightnessLabel(label: string | null) {

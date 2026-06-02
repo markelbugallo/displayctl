@@ -2,7 +2,6 @@ import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-
 import type { RefreshRateOption } from '../services/display-config.js';
 
 type RefreshRateMenuHandlers = {
@@ -65,7 +64,7 @@ export class RefreshRateMenu {
       this.menu = new PopupMenu.PopupMenu(this.dropdownBox, 0.5, St.Side.TOP);
       this.menu.actor.name = 'displayctl-refresh-rate-popup';
       this.menu.actor.visible = false;
-      
+
       // Add menu actor to UI Group
       Main.uiGroup.add_child(this.menu.actor);
 

@@ -213,11 +213,54 @@ export default class DisplayctlExtension extends Extension {
       const entries = this.displayConfig.getMonitorEntries(this._monitors);
       const primary = this.displayConfig.getPrimaryConnector(this._logicalMonitors, Main.layoutManager.primaryMonitor);
       const canApply = this.displayConfig.canApplyMonitorsConfig();
-      this.indicatorMenu.updatePrimaryMonitorMenu(entries, primary, canApply);
+
+      const hasBuiltin = this._monitors.some((monitor) => {
+        const [monitorInfo] = monitor;
+        const connector = Array.isArray(monitorInfo) ? monitorInfo[0] : null;
+        return connector && this._isBuiltinConnector(connector);
+      });
+
+      const isBuiltinActive = this._logicalMonitors.some((lm) => {
+        const [, , , , , monitors] = lm;
+        return (monitors || []).some((m: any) => {
+          let connectorName = '';
+          if (Array.isArray(m)) {
+            if (Array.isArray(m[0])) {
+              connectorName = m[0][0];
+            } else {
+              connectorName = m[0];
+            }
+          } else if (typeof m === 'string') {
+            connectorName = m;
+          }
+          return connectorName && this._isBuiltinConnector(connectorName);
+        });
+      });
+
+      const isExternalActive = this._logicalMonitors.some((lm) => {
+        const [, , , , , monitors] = lm;
+        return (monitors || []).some((m: any) => {
+          let connectorName = '';
+          if (Array.isArray(m)) {
+            if (Array.isArray(m[0])) {
+              connectorName = m[0][0];
+            } else {
+              connectorName = m[0];
+            }
+          } else if (typeof m === 'string') {
+            connectorName = m;
+          }
+          return connectorName && !this._isBuiltinConnector(connectorName);
+        });
+      });
+
+      const isLidClosedOnlyExternal = hasBuiltin && !isBuiltinActive && isExternalActive;
+
+      this.indicatorMenu.updatePrimaryMonitorMenu(entries, primary, canApply, isLidClosedOnlyExternal);
       this._updateRefreshRateMenu(canApply);
 
       const currentMode = this.displayConfig.getCurrentDisplayMode(state);
-      this.indicatorMenu.updateDisplayLayoutMenu(currentMode, canApply);
+      this.indicatorMenu.updateDisplayLayoutMenu(currentMode, canApply, isLidClosedOnlyExternal);
 
       if (skipDdc) {
         await this._refreshBrightness(true);

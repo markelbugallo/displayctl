@@ -1,5 +1,4 @@
 import St from 'gi://St';
-
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { calculateSoftwareOpacity } from '@displayctl/core';
 
@@ -71,7 +70,7 @@ export class OverlayManager {
 
       const brightness = activeSoftwareBrightness.get(connector) ?? 1.0;
       const opacity = calculateSoftwareOpacity(brightness);
-      
+
       overlay.opacity = opacity;
       overlay.visible = brightness < 1.0;
     }
