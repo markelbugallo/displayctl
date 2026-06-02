@@ -220,7 +220,7 @@ export default class DisplayctlExtension extends Extension {
       this.indicatorMenu.updateDisplayLayoutMenu(currentMode, canApply);
 
       if (skipDdc) {
-        this.overlayManager.updateOverlays(this._externalConnectors, this._softwareBrightness, this._logicalMonitors, undefined);
+        await this._refreshBrightness(true);
         return;
       }
 
@@ -232,7 +232,7 @@ export default class DisplayctlExtension extends Extension {
         await this.ddcController.detectDdcBuses(this._externalConnectors);
       }
 
-      await this._refreshBrightness();
+      await this._refreshBrightness(false);
     } catch (err: any) {
       console.error('[displayctl] Error inside _refreshState:', err, err?.stack);
     }
@@ -254,7 +254,7 @@ export default class DisplayctlExtension extends Extension {
     return connectors;
   }
 
-  private async _refreshBrightness() {
+  private async _refreshBrightness(skipDdc = false) {
     if (!this.indicatorMenu) return;
     if (this.ddcController.isBusy()) {
       return;
@@ -277,7 +277,7 @@ export default class DisplayctlExtension extends Extension {
       isExternal: true,
     };
 
-    if (this.ddcController.isDdcutilAvailable()) {
+    if (!skipDdc && this.ddcController.isDdcutilAvailable()) {
       const hwState = await this.ddcController.getHardwareBrightness(monitor);
       if (hwState) {
         this._backlightState = hwState;
