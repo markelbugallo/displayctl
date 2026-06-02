@@ -597,6 +597,307 @@ export class DisplayConfigClient {
     return null;
   }
 
+  getConnectors(state: DisplayConfigState) {
+    let builtinConnector = '';
+    let externalConnector = '';
+
+    for (const monitor of state.monitors || []) {
+      const [monitorInfo] = monitor;
+      const connector = Array.isArray(monitorInfo) ? monitorInfo[0] : null;
+      if (!connector) continue;
+
+      if (this.isBuiltinConnector(connector)) {
+        if (!builtinConnector) builtinConnector = connector;
+      } else {
+        if (!externalConnector) externalConnector = connector;
+      }
+    }
+
+    // Fallbacks if we can't find one of them
+    if (!builtinConnector && state.monitors.length > 0) {
+      const [info] = state.monitors[0];
+      builtinConnector = Array.isArray(info) ? info[0] : '';
+    }
+    if (!externalConnector && state.monitors.length > 1) {
+      const [info] = state.monitors[1];
+      externalConnector = Array.isArray(info) ? info[0] : '';
+    }
+
+    return { builtinConnector, externalConnector };
+  }
+
+  private getBestModeId(monitors: any[], connector: string): string | null {
+    const rawModes = this.getModesForConnector(monitors, connector);
+    if (rawModes.length === 0) {
+      return null;
+    }
+
+    for (const mode of rawModes) {
+      const properties = mode[6];
+      if (this.getPropertyValue(properties, 'is-preferred') === true) {
+        return mode[0];
+      }
+    }
+
+    for (const mode of rawModes) {
+      const properties = mode[6];
+      if (this.getPropertyValue(properties, 'is-current') === true) {
+        return mode[0];
+      }
+    }
+
+    return rawModes[0][0];
+  }
+
+  private getConnectorsInLogicalMonitor(logicalMonitor: any): string[] {
+    const [, , , , , monitors] = logicalMonitor;
+    const result: string[] = [];
+    for (const m of monitors || []) {
+      const { connectorName } = this.getConnectorFromMonitor(m);
+      if (connectorName) {
+        result.push(connectorName);
+      }
+    }
+    return result;
+  }
+
+  getCurrentDisplayMode(state: DisplayConfigState): string {
+    const { builtinConnector, externalConnector } = this.getConnectors(state);
+    if (!builtinConnector || !externalConnector) {
+      return 'unknown';
+    }
+
+    let hasBuiltin = false;
+    let hasExternal = false;
+    let isMirrored = false;
+
+    for (const logicalMonitor of state.logicalMonitors || []) {
+      const connectors = this.getConnectorsInLogicalMonitor(logicalMonitor);
+      const containsBuiltin = connectors.includes(builtinConnector);
+      const containsExternal = connectors.includes(externalConnector);
+
+      if (containsBuiltin && containsExternal) {
+        isMirrored = true;
+      }
+      if (containsBuiltin) {
+        hasBuiltin = true;
+      }
+      if (containsExternal) {
+        hasExternal = true;
+      }
+    }
+
+    if (isMirrored) {
+      return 'mirror';
+    }
+    if (hasBuiltin && hasExternal) {
+      return 'join';
+    }
+    if (hasBuiltin) {
+      return 'builtin-only';
+    }
+    if (hasExternal) {
+      return 'external-only';
+    }
+    return 'unknown';
+  }
+
+  async applyDisplayMode(mode: string): Promise<boolean> {
+    if (!this.proxy) {
+      return false;
+    }
+
+    if (!this.canApplyMonitorsConfig()) {
+      console.error('Cannot apply monitor configuration changes.');
+      return false;
+    }
+
+    const state = await this.getCurrentState();
+    if (!state) {
+      return false;
+    }
+
+    const { builtinConnector, externalConnector } = this.getConnectors(state);
+    if (!builtinConnector || !externalConnector) {
+      console.error('Cannot apply display mode because either builtin or external connector is missing.');
+      return false;
+    }
+
+    let updatedLogicalMonitors: any[] = [];
+
+    // Find current scales to preserve them
+    let builtinScale = 1.0;
+    let externalScale = 1.0;
+    let wasExternalPrimary = false;
+
+    for (const lm of state.logicalMonitors || []) {
+      const isPrimary = lm[4];
+      if (this.logicalMonitorContainsConnector(lm[5], builtinConnector)) {
+        builtinScale = lm[2];
+      }
+      if (this.logicalMonitorContainsConnector(lm[5], externalConnector)) {
+        externalScale = lm[2];
+        if (isPrimary) {
+          wasExternalPrimary = true;
+        }
+      }
+    }
+
+    if (mode === 'builtin-only') {
+      const builtinModeId = this.getBestModeId(state.monitors, builtinConnector);
+      if (!builtinModeId) return false;
+
+      updatedLogicalMonitors = [
+        [
+          0,
+          0,
+          builtinScale,
+          0,
+          true,
+          [
+            [builtinConnector, builtinModeId, {}]
+          ]
+        ]
+      ];
+    } else if (mode === 'external-only') {
+      const externalModeId = this.getBestModeId(state.monitors, externalConnector);
+      if (!externalModeId) return false;
+
+      updatedLogicalMonitors = [
+        [
+          0,
+          0,
+          externalScale,
+          0,
+          true,
+          [
+            [externalConnector, externalModeId, {}]
+          ]
+        ]
+      ];
+    } else if (mode === 'mirror') {
+      const builtinModes = this.getMonitorModeEntries(this.getModesForConnector(state.monitors, builtinConnector));
+      const externalModes = this.getMonitorModeEntries(this.getModesForConnector(state.monitors, externalConnector));
+
+      const builtinResolutions = new Set(builtinModes.map((m) => `${m.width}x${m.height}`));
+      const commonResolutions = externalModes.filter((m) => builtinResolutions.has(`${m.width}x${m.height}`));
+
+      commonResolutions.sort((a, b) => (b.width * b.height) - (a.width * a.height));
+
+      let targetWidth = 1920;
+      let targetHeight = 1080;
+
+      if (commonResolutions.length > 0) {
+        targetWidth = commonResolutions[0].width;
+        targetHeight = commonResolutions[0].height;
+      } else {
+        const builtinBest = this.getBestModeId(state.monitors, builtinConnector);
+        const builtinBestMode = builtinModes.find((m) => m.id === builtinBest);
+        if (builtinBestMode) {
+          targetWidth = builtinBestMode.width;
+          targetHeight = builtinBestMode.height;
+        }
+      }
+
+      let builtinModeId = null;
+      const builtinMatch = builtinModes.find((m) => m.width === targetWidth && m.height === targetHeight);
+      if (builtinMatch) {
+        builtinModeId = builtinMatch.id;
+      } else {
+        builtinModeId = this.getBestModeId(state.monitors, builtinConnector);
+      }
+
+      let externalModeId = null;
+      const externalMatch = externalModes.find((m) => m.width === targetWidth && m.height === targetHeight);
+      if (externalMatch) {
+        externalModeId = externalMatch.id;
+      } else {
+        externalModeId = this.getBestModeId(state.monitors, externalConnector);
+      }
+
+      if (!builtinModeId || !externalModeId) return false;
+
+      updatedLogicalMonitors = [
+        [
+          0,
+          0,
+          builtinScale,
+          0,
+          true,
+          [
+            [builtinConnector, builtinModeId, {}],
+            [externalConnector, externalModeId, {}]
+          ]
+        ]
+      ];
+    } else if (mode === 'join') {
+      const builtinModeId = this.getBestModeId(state.monitors, builtinConnector);
+      const externalModeId = this.getBestModeId(state.monitors, externalConnector);
+      if (!builtinModeId || !externalModeId) return false;
+
+      const builtinModes = this.getMonitorModeEntries(this.getModesForConnector(state.monitors, builtinConnector));
+      const builtinMode = builtinModes.find((m) => m.id === builtinModeId);
+      const builtinWidth = builtinMode ? builtinMode.width : 1920;
+
+      const layoutMode = this.getPropertyValue(state.properties, 'layout-mode');
+      const scaleDivider = (layoutMode === 1) ? 1.0 : builtinScale;
+      const externalX = Math.round(builtinWidth / scaleDivider);
+
+      updatedLogicalMonitors = [
+        [
+          0,
+          0,
+          builtinScale,
+          0,
+          !wasExternalPrimary,
+          [
+            [builtinConnector, builtinModeId, {}]
+          ]
+        ],
+        [
+          externalX,
+          0,
+          externalScale,
+          0,
+          wasExternalPrimary,
+          [
+            [externalConnector, externalModeId, {}]
+          ]
+        ]
+      ];
+    } else {
+      console.error(`Unknown display mode: ${mode}`);
+      return false;
+    }
+
+    const configProperties = this.getApplyConfigProperties(state.properties);
+    const params = new GLib.Variant('(uua(iiduba(ssa{sv}))a{sv})', [
+      state.serial,
+      3,
+      updatedLogicalMonitors,
+      configProperties,
+    ]);
+
+    return new Promise((resolve) => {
+      this.proxy!.call(
+        'ApplyMonitorsConfig',
+        params,
+        Gio.DBusCallFlags.NONE,
+        -1,
+        null,
+        (applyProxy: any, applyResult: any) => {
+          try {
+            applyProxy.call_finish(applyResult);
+            resolve(true);
+          } catch (error) {
+            console.error('Failed to apply display mode configuration:', error);
+            resolve(false);
+          }
+        }
+      );
+    });
+  }
+
   private isBuiltinConnector(connector: string): boolean {
     return connector.startsWith('eDP') || connector.startsWith('LVDS') || connector.startsWith('DSI');
   }

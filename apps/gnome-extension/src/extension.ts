@@ -36,6 +36,7 @@ export default class DisplayctlExtension extends Extension {
       onBrightnessChanged: (value) => { void this._onBrightnessSliderChanged(value); },
       onPrimaryMonitorSelected: (connector) => { void this._applyPrimaryMonitor(connector); },
       onRefreshRateSelected: (refreshRate) => { void this._applyRefreshRate(refreshRate); },
+      onDisplayModeSelected: (mode) => { void this._applyDisplayMode(mode); },
       onMenuOpen: () => { void this._refreshState(false); },
     });
     this.indicatorMenu.attachToPanel();
@@ -215,6 +216,9 @@ export default class DisplayctlExtension extends Extension {
       this.indicatorMenu.updatePrimaryMonitorMenu(entries, primary, canApply);
       this._updateRefreshRateMenu(canApply);
 
+      const currentMode = this.displayConfig.getCurrentDisplayMode(state);
+      this.indicatorMenu.updateDisplayLayoutMenu(currentMode, canApply);
+
       if (skipDdc) {
         this.overlayManager.updateOverlays(this._externalConnectors, this._softwareBrightness, this._logicalMonitors, undefined);
         return;
@@ -336,6 +340,14 @@ export default class DisplayctlExtension extends Extension {
   private async _applyPrimaryMonitor(connector: string) {
     if (!this.displayConfig) return;
     const ok = await this.displayConfig.setPrimaryMonitor(connector);
+    if (ok) {
+      void this._refreshState();
+    }
+  }
+
+  private async _applyDisplayMode(mode: string) {
+    if (!this.displayConfig) return;
+    const ok = await this.displayConfig.applyDisplayMode(mode);
     if (ok) {
       void this._refreshState();
     }

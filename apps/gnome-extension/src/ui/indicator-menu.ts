@@ -17,6 +17,7 @@ type IndicatorMenuHandlers = {
   onBrightnessChanged: (value: number) => void;
   onPrimaryMonitorSelected: (connector: string) => void;
   onRefreshRateSelected: (refreshRate: number) => void;
+  onDisplayModeSelected: (mode: string) => void;
   onMenuOpen?: () => void;
 };
 
@@ -27,15 +28,19 @@ export class IndicatorMenu {
   private brightnessSeparatorItem: any = null;
   private brightnessLabelItem: any = null;
   private primaryMonitorItem: any = null;
+  private displayLayoutItem: any = null;
   private refreshRateMenu: RefreshRateMenu | null = null;
   private primaryMonitorItems = new Map<string, any>();
+  private displayLayoutItems = new Map<string, any>();
   private menuOpenId: number | null = null;
   private onPrimaryMonitorSelected: (connector: string) => void;
+  private onDisplayModeSelected: (mode: string) => void;
 
   constructor(icon: any, handlers: IndicatorMenuHandlers) {
     this.indicator = new PanelMenu.Button(0.0, 'Displayctl');
     this.indicator.add_child(icon);
     this.onPrimaryMonitorSelected = handlers.onPrimaryMonitorSelected;
+    this.onDisplayModeSelected = handlers.onDisplayModeSelected;
     this.refreshRateMenu = new RefreshRateMenu({
       onRefreshRateSelected: handlers.onRefreshRateSelected,
     });
@@ -69,12 +74,14 @@ export class IndicatorMenu {
     }
 
     this.primaryMonitorItems.clear();
+    this.displayLayoutItems.clear();
     this.indicator = null;
     this.brightnessItem = null;
     this.brightnessIcon = null;
     this.brightnessSeparatorItem = null;
     this.brightnessLabelItem = null;
     this.primaryMonitorItem = null;
+    this.displayLayoutItem = null;
     this.refreshRateMenu = null;
   }
 
@@ -120,6 +127,38 @@ export class IndicatorMenu {
     }
 
     this.primaryMonitorItem.setSensitive(canApply);
+  }
+
+  updateDisplayLayoutMenu(currentMode: string, canApply: boolean) {
+    if (!this.displayLayoutItem) {
+      return;
+    }
+
+    this.displayLayoutItems.clear();
+    this.displayLayoutItem.menu.removeAll();
+
+    const options = [
+      { mode: 'mirror', label: 'Espejo' },
+      { mode: 'join', label: 'Unir pantallas' },
+      { mode: 'external-only', label: 'Solo externa' },
+      { mode: 'builtin-only', label: 'Solo integrada' }
+    ];
+
+    const activeOption = options.find((opt) => opt.mode === currentMode);
+    const activeLabel = activeOption ? activeOption.label : 'Desconocido';
+    this.displayLayoutItem.label.text = activeLabel;
+
+    for (const option of options) {
+      const item = new PopupMenu.PopupMenuItem(option.label);
+      this.setMenuItemOrnament(item, option.mode === currentMode);
+      item.connect('activate', () => {
+        this.onDisplayModeSelected(option.mode);
+      });
+      this.displayLayoutItem.menu.addMenuItem(item);
+      this.displayLayoutItems.set(option.mode, item);
+    }
+
+    this.displayLayoutItem.setSensitive(canApply);
   }
 
   setBrightnessLabel(label: string | null) {
@@ -170,6 +209,9 @@ export class IndicatorMenu {
   private buildMenu(onBrightnessChanged: (value: number) => void) {
     this.primaryMonitorItem = new PopupMenu.PopupSubMenuMenuItem('Monitor principal');
     this.indicator.menu.addMenuItem(this.primaryMonitorItem, 0);
+
+    this.displayLayoutItem = new PopupMenu.PopupSubMenuMenuItem('Pantallas');
+    this.indicator.menu.addMenuItem(this.displayLayoutItem, 1);
 
     this.brightnessSeparatorItem = new PopupMenu.PopupSeparatorMenuItem();
     this.indicator.menu.addMenuItem(this.brightnessSeparatorItem);
