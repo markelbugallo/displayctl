@@ -1,7 +1,5 @@
-*.png
 *.txt
+*.sh
 .github/
-*.md
-install.sh
 apps/windows-app/*
 **/dist/
