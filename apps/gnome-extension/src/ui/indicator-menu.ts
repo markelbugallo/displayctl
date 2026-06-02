@@ -1,4 +1,5 @@
 import St from 'gi://St';
+import Pango from 'gi://Pango';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
@@ -36,6 +37,7 @@ export class IndicatorMenu {
 
   constructor(icon: any, handlers: IndicatorMenuHandlers) {
     this.indicator = new PanelMenu.Button(0.0, 'Displayctl');
+    this.indicator.set_style('padding: 0 4px; -natural-hpadding: 4px; -minimum-hpadding: 4px;');
     this.indicator.add_child(icon);
     this.onPrimaryMonitorSelected = handlers.onPrimaryMonitorSelected;
     this.onDisplayModeSelected = handlers.onDisplayModeSelected;
@@ -126,6 +128,10 @@ export class IndicatorMenu {
 
     for (const entry of entries) {
       const item = new PopupMenu.PopupMenuItem(entry.name);
+      if (item.label) {
+        item.label.x_expand = true;
+        item.label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
+      }
       this.setMenuItemOrnament(item, entry.connector === primaryConnector);
       item.connect('activate', () => this.onPrimaryMonitorSelected(entry.connector));
       this.primaryMonitorItem.menu.addMenuItem(item);
@@ -177,6 +183,10 @@ export class IndicatorMenu {
 
     for (const option of options) {
       const item = new PopupMenu.PopupMenuItem(option.label);
+      if (item.label) {
+        item.label.x_expand = true;
+        item.label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
+      }
       this.setMenuItemOrnament(item, option.mode === currentMode);
       item.connect('activate', () => {
         this.onDisplayModeSelected(option.mode);
@@ -256,10 +266,20 @@ export class IndicatorMenu {
   }
 
   private buildMenu(onBrightnessChanged: (value: number) => void) {
+    this.indicator.menu.box.set_style('width: 250px;');
+
     this.primaryMonitorItem = new PopupMenu.PopupSubMenuMenuItem('Monitor principal');
+    if (this.primaryMonitorItem.label) {
+      this.primaryMonitorItem.label.x_expand = true;
+      this.primaryMonitorItem.label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
+    }
     this.indicator.menu.addMenuItem(this.primaryMonitorItem, 0);
 
     this.displayLayoutItem = new PopupMenu.PopupSubMenuMenuItem('Pantallas');
+    if (this.displayLayoutItem.label) {
+      this.displayLayoutItem.label.x_expand = true;
+      this.displayLayoutItem.label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
+    }
     this.indicator.menu.addMenuItem(this.displayLayoutItem, 1);
 
     this.brightnessSeparatorItem = new PopupMenu.PopupSeparatorMenuItem();
@@ -272,6 +292,8 @@ export class IndicatorMenu {
     if (this.brightnessLabelItem.label) {
       this.brightnessLabelItem.label.set_style('font-weight: 300;');
       this.brightnessLabelItem.label.set_x_align(0);
+      this.brightnessLabelItem.label.x_expand = true;
+      this.brightnessLabelItem.label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
     }
     this.indicator.menu.addMenuItem(this.brightnessLabelItem);
 

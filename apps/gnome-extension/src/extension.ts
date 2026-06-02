@@ -76,7 +76,7 @@ export default class DisplayctlExtension extends Extension {
           try {
             console.log('[displayctl] Destroying identified refresh rate popup');
             child.destroy();
-          } catch (e) {}
+          } catch (e) { }
         }
       });
     } catch (e) {
@@ -145,15 +145,17 @@ export default class DisplayctlExtension extends Extension {
   private _createIndicatorIcon(): any {
     const iconFile = this._getIconFile();
     if (iconFile) {
-      return new St.Icon({
+      const icon = new St.Icon({
         gicon: new Gio.FileIcon({ file: iconFile }),
-        icon_size: 16,
+        icon_size: 18,
         style_class: 'system-status-icon',
       });
+      icon.set_style('margin-top: 2px;');
+      return icon;
     }
     return new St.Icon({
       icon_name: 'video-display-symbolic',
-      icon_size: 16,
+      icon_size: 18,
       style_class: 'system-status-icon',
     });
   }
@@ -193,7 +195,7 @@ export default class DisplayctlExtension extends Extension {
     if (!skipDdc && this._startupTimeoutId) {
       try {
         GLib.Source.remove(this._startupTimeoutId);
-      } catch (e) {}
+      } catch (e) { }
       this._startupTimeoutId = null;
     }
 
