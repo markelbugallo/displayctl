@@ -7,8 +7,14 @@ use windows::Win32::Devices::Display::{
     DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
     DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME,
 };
-use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR, GetMonitorInfoW, MONITORINFOEXW};
-use windows::Win32::Foundation::{BOOL, LPARAM, RECT, HANDLE};
+use windows::Win32::Graphics::Gdi::{
+    EnumDisplayMonitors, HDC, HMONITOR, GetMonitorInfoW, MONITORINFOEXW,
+    EnumDisplaySettingsW, ChangeDisplaySettingsExW, DEVMODEW,
+    ENUM_CURRENT_SETTINGS, DM_DISPLAYFREQUENCY, CDS_UPDATEREGISTRY,
+    DISP_CHANGE_SUCCESSFUL, ENUM_DISPLAY_SETTINGS_MODE,
+};
+use windows::Win32::Foundation::{BOOL, LPARAM, RECT, HANDLE, HWND};
+use windows::core::PCWSTR;
 
 #[allow(dead_code)]
 pub struct DdcMonitor {
@@ -17,6 +23,7 @@ pub struct DdcMonitor {
     pub min_brightness: u32,
     pub current_brightness: u32,
     pub max_brightness: u32,
+    pub gdi_device_name: String,
 }
 
 #[allow(dead_code)]
@@ -171,12 +178,25 @@ pub fn detect_ddc_monitors() -> Vec<DdcMonitor> {
                         if GetMonitorBrightness(pm.hPhysicalMonitor, &mut min, &mut cur, &mut max) != 0 {
                             let friendly_name = get_friendly_name_for_hmonitor(hmon);
                             let display_name = friendly_name.unwrap_or_else(|| {
-                                // Convert description to String
                                 let desc = pm.szPhysicalMonitorDescription;
                                 let len = desc.iter().position(|&c| c == 0).unwrap_or(128);
                                 let name = String::from_utf16_lossy(&desc[..len]);
                                 if name.trim().is_empty() { "Monitor externo".to_string() } else { name }
                             });
+
+                            let mut info = MONITORINFOEXW::default();
+                            info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+                            let gdi_device_name = if GetMonitorInfoW(hmon, &mut info as *mut _ as *mut _).as_bool() {
+                                String::from_utf16_lossy(
+                                    &info.szDevice
+                                        .iter()
+                                        .take_while(|&&c| c != 0)
+                                        .cloned()
+                                        .collect::<Vec<u16>>()
+                                )
+                            } else {
+                                String::new()
+                            };
 
                             results.push(DdcMonitor {
                                 monitor: pm,
@@ -184,6 +204,7 @@ pub fn detect_ddc_monitors() -> Vec<DdcMonitor> {
                                 min_brightness: min,
                                 current_brightness: cur,
                                 max_brightness: max,
+                                gdi_device_name,
                             });
                         } else {
                             // If DDC/CI is not supported on this handle, release it immediately
@@ -200,5 +221,81 @@ pub fn detect_ddc_monitors() -> Vec<DdcMonitor> {
 pub fn set_monitor_brightness_value(h_physical: HANDLE, val: u32) -> bool {
     unsafe {
         SetMonitorBrightness(h_physical, val) != 0
+    }
+}
+
+pub fn get_refresh_rates(gdi_device_name: &str) -> (Vec<u32>, u32) {
+    let mut rates = Vec::new();
+    let mut current_rate = 60;
+    if gdi_device_name.is_empty() {
+        return (rates, current_rate);
+    }
+    unsafe {
+        let device_wide = crate::utils::encode_wide(gdi_device_name);
+        
+        let mut current_devmode = DEVMODEW::default();
+        current_devmode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+        if EnumDisplaySettingsW(
+            PCWSTR(device_wide.as_ptr()),
+            ENUM_CURRENT_SETTINGS,
+            &mut current_devmode,
+        ).as_bool() {
+            current_rate = current_devmode.dmDisplayFrequency;
+        }
+
+        let mut i = 0;
+        loop {
+            let mut devmode = DEVMODEW::default();
+            devmode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+            if !EnumDisplaySettingsW(
+                PCWSTR(device_wide.as_ptr()),
+                ENUM_DISPLAY_SETTINGS_MODE(i),
+                &mut devmode,
+            ).as_bool() {
+                break;
+            }
+            if devmode.dmPelsWidth == current_devmode.dmPelsWidth 
+               && devmode.dmPelsHeight == current_devmode.dmPelsHeight 
+            {
+                let freq = devmode.dmDisplayFrequency;
+                if freq > 0 && !rates.contains(&freq) {
+                    rates.push(freq);
+                }
+            }
+            i += 1;
+        }
+    }
+    rates.sort_unstable();
+    (rates, current_rate)
+}
+
+pub fn set_refresh_rate(gdi_device_name: &str, rate: u32) -> bool {
+    if gdi_device_name.is_empty() {
+        return false;
+    }
+    unsafe {
+        let device_wide = crate::utils::encode_wide(gdi_device_name);
+        
+        let mut devmode = DEVMODEW::default();
+        devmode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+        if !EnumDisplaySettingsW(
+            PCWSTR(device_wide.as_ptr()),
+            ENUM_CURRENT_SETTINGS,
+            &mut devmode,
+        ).as_bool() {
+            return false;
+        }
+
+        devmode.dmDisplayFrequency = rate;
+        devmode.dmFields = DM_DISPLAYFREQUENCY;
+
+        let res = ChangeDisplaySettingsExW(
+            PCWSTR(device_wide.as_ptr()),
+            Some(&devmode),
+            HWND::default(),
+            CDS_UPDATEREGISTRY,
+            None,
+        );
+        res == DISP_CHANGE_SUCCESSFUL
     }
 }
