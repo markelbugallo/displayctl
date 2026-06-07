@@ -1,0 +1,62 @@
+name: Check esbuild version
+
+on:
+  schedule:
+    - cron: "0 9 * * 1" # mondays 9 AM
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-esbuild:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Download source code
+        uses: actions/checkout@v4
+
+      - name: Check latest esbuild version and open PR if outdated
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST=$(curl -fsSL https://api.github.com/repos/evanw/esbuild/releases/latest | jq -r '.tag_name' | tr -d 'v')
+          CURRENT=$(grep -o 'download/v[0-9.]*/esbuild_linux_amd64' .github/workflows/update-releases.yml | cut -d'/' -f2 | tr -d 'v')
+
+          echo "Current version: $CURRENT"
+          echo "Latest version: $LATEST"
+
+          # Validate versions to prevent command injection or empty values
+          if [[ ! "$LATEST" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Invalid latest version fetched: '$LATEST'"
+            exit 1
+          fi
+
+          if [[ ! "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Could not parse current version from update-releases.yml (found: '$CURRENT')"
+            exit 1
+          fi
+
+          if [ "$CURRENT" != "$LATEST" ]; then
+            BRANCH="update-esbuild-v$LATEST"
+
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+
+            git checkout -b "$BRANCH"
+
+            # Update the esbuild URL with the new version
+            sed -i "s/download\/v$CURRENT\/esbuild_linux_amd64/download\/v$LATEST\/esbuild_linux_amd64/g" .github/workflows/update-releases.yml
+
+            git add .github/workflows/update-releases.yml
+            git commit -m "chore: update esbuild v$CURRENT -> v$LATEST"
+            git push origin "$BRANCH"
+
+            gh pr create \
+              --title "chore: update esbuild v$CURRENT -> v$LATEST" \
+              --body "Automatic esbuild update from \`v$CURRENT\` to \`v$LATEST\`." \
+              --base main \
+              --head "$BRANCH"
+          fi

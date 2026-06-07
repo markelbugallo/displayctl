@@ -1,0 +1,90 @@
+name: Update Releases on demand
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+
+  # windows-11
+  update-windows:
+    if: |
+      contains(github.event.head_commit.message, '#w11') ||
+      contains(github.event.head_commit.message, '#W11')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download source code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+
+      - name: Build Windows application
+        run: |
+          cd apps/windows-app
+          cargo build --release --locked
+
+      - name: Build Installer (Inno Setup)
+        run: |
+          iscc apps/windows-app/installer.iss
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "windows-11" || gh release create "windows-11" --title "Windows 11" --notes "Auto-generated release for Windows 11"
+          gh release upload "windows-11" "apps/windows-app/output/displayctl-setup.exe" --clobber
+
+  # gnome-50
+  update-gnome:
+    if: |
+      contains(github.event.head_commit.message, '#g50') ||
+      contains(github.event.head_commit.message, '#G50')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download source code
+        uses: actions/checkout@v4
+
+      - name: Install esbuild
+        run: |
+          curl -fsSL https://github.com/evanw/esbuild/releases/download/v0.25.0/esbuild_linux_amd64.zip -o esbuild.zip
+          unzip esbuild.zip
+          sudo mv esbuild /usr/local/bin/
+
+      - name: Build and package extension
+        run: |
+          mkdir -p dist
+
+          esbuild apps/gnome-extension/src/extension.ts \
+            --bundle \
+            --format=esm \
+            --platform=neutral \
+            --outfile=dist/extension.js \
+            --external:"gi://*" \
+            --external:"resource://*" \
+            --tsconfig=apps/gnome-extension/tsconfig.json
+
+          cp apps/gnome-extension/metadata.json dist/
+          cp -r assets dist/
+
+          cd dist && zip -r ../displayctl@mbg.zip * && cd ..
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "gnome-50" || gh release create "gnome-50" --title "Gnome 50" --notes "Auto-generated release for Gnome 50"
+          gh release upload "gnome-50" "displayctl@mbg.zip" --clobber
