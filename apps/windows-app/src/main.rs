@@ -7,7 +7,7 @@ mod menu;
 mod utils;
 
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicBool, Ordering};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM, LRESULT, WPARAM, HINSTANCE};
 use windows::Win32::Graphics::Gdi::{
@@ -16,7 +16,10 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateIconIndirect, DestroyIcon, DispatchMessageW, GetMessageW,
     PostQuitMessage, RegisterClassW, TranslateMessage, CreateWindowExW, DefWindowProcW, HICON,
-    ICONINFO, MSG, WNDCLASSW, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP,
+    ICONINFO, MSG, WNDCLASSW, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_DISPLAYCHANGE,
+    CreatePopupMenu, AppendMenuW, TrackPopupMenu, DestroyMenu, SetForegroundWindow, GetCursorPos,
+    MF_STRING, TPM_RETURNCMD, TPM_NONOTIFY, TPM_BOTTOMALIGN, TPM_TOPALIGN,
+    GetSystemMetrics, SystemParametersInfoW, SM_CYSCREEN, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
 };
 use windows::Win32::System::Console::{
     SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT,
@@ -27,6 +30,7 @@ use tray::{update_tray_icon, delete_tray_icon, WM_TRAY_ICON_CALLBACK};
 use menu::show_menu;
 
 static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
+static TRAY_ICON_SHOWN: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "system" fn console_ctrl_handler(ctrl_type: u32) -> BOOL {
     if ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT || ctrl_type == CTRL_CLOSE_EVENT {
@@ -153,15 +157,90 @@ unsafe fn create_icon_from_png(png_bytes: &[u8]) -> Result<HICON, Box<dyn std::e
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_THEME_CHANGED => {
-            if let Some(state) = APP_STATE.get() {
-                update_tray_icon(hwnd, false, state.icon_black, state.icon_white);
+            if TRAY_ICON_SHOWN.load(Ordering::SeqCst) {
+                if let Some(state) = APP_STATE.get() {
+                    update_tray_icon(hwnd, false, state.icon_black, state.icon_white);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_DISPLAYCHANGE => {
+            let external_monitors = monitor::count_external_monitors();
+            let is_shown = TRAY_ICON_SHOWN.load(Ordering::SeqCst);
+            if external_monitors > 0 && !is_shown {
+                if let Some(state) = APP_STATE.get() {
+                    update_tray_icon(hwnd, true, state.icon_black, state.icon_white);
+                    TRAY_ICON_SHOWN.store(true, Ordering::SeqCst);
+                }
+            } else if external_monitors == 0 && is_shown {
+                delete_tray_icon(hwnd);
+                TRAY_ICON_SHOWN.store(false, Ordering::SeqCst);
             }
             LRESULT(0)
         }
         WM_TRAY_ICON_CALLBACK => {
             let event = lparam.0 as u32;
-            if event == WM_RBUTTONUP || event == WM_LBUTTONUP {
+            if event == WM_LBUTTONUP {
                 show_menu(hwnd);
+            } else if event == WM_RBUTTONUP {
+                unsafe {
+                    let mut cursor = windows::Win32::Foundation::POINT::default();
+                    let _ = GetCursorPos(&mut cursor);
+
+                    if let Ok(hmenu) = CreatePopupMenu() {
+                        let text_salir = encode_wide("Salir");
+                        let _ = AppendMenuW(
+                            hmenu,
+                            MF_STRING,
+                            1,
+                            PCWSTR(text_salir.as_ptr()),
+                        );
+
+                        let _ = SetForegroundWindow(hwnd);
+
+                        let mut flags = TPM_RETURNCMD | TPM_NONOTIFY;
+                        let screen_height = GetSystemMetrics(SM_CYSCREEN);
+                        let mut work_area = windows::Win32::Foundation::RECT::default();
+                        let _ = SystemParametersInfoW(
+                            SPI_GETWORKAREA,
+                            0,
+                            Some(&mut work_area as *mut _ as *mut std::ffi::c_void),
+                            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+                        );
+
+                        let y_pos = if work_area.bottom < screen_height {
+                            flags |= TPM_BOTTOMALIGN;
+                            work_area.bottom - 8
+                        } else if work_area.top > 0 {
+                            flags |= TPM_TOPALIGN;
+                            work_area.top + 8
+                        } else {
+                            flags |= TPM_BOTTOMALIGN;
+                            cursor.y - 8
+                        };
+
+                        let cmd = TrackPopupMenu(
+                            hmenu,
+                            flags,
+                            cursor.x,
+                            y_pos,
+                            0,
+                            hwnd,
+                            None,
+                        );
+
+                        let _ = DestroyMenu(hmenu);
+
+                        if cmd.0 == 1 {
+                            let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
+                                hwnd,
+                                windows::Win32::UI::WindowsAndMessaging::WM_DESTROY,
+                                WPARAM(0),
+                                LPARAM(0),
+                            );
+                        }
+                    }
+                }
             }
             LRESULT(0)
         }
@@ -219,7 +298,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         MAIN_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
 
-        update_tray_icon(hwnd, true, icon_black, icon_white);
+        let external_monitors = monitor::count_external_monitors();
+        if external_monitors > 0 {
+            update_tray_icon(hwnd, true, icon_black, icon_white);
+            TRAY_ICON_SHOWN.store(true, Ordering::SeqCst);
+        }
         monitor_theme_changes(hwnd);
 
         let mut msg = MSG::default();

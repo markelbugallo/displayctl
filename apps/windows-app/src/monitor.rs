@@ -6,6 +6,9 @@ use windows::Win32::Devices::Display::{
     PHYSICAL_MONITOR, DisplayConfigGetDeviceInfo,
     DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
     DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME,
+    DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED,
+    DISPLAYCONFIG_OUTPUT_TECHNOLOGY_UDI_EMBEDDED,
+    DISPLAYCONFIG_OUTPUT_TECHNOLOGY_LVDS,
 };
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, HDC, HMONITOR, GetMonitorInfoW, MONITORINFOEXW,
@@ -52,7 +55,11 @@ pub fn count_external_monitors() -> usize {
         let mut external_count = 0;
         for path in &paths[..num_paths as usize] {
             let tech = path.targetInfo.outputTechnology;
-            if tech != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL {
+            if tech != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL
+                && tech != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED
+                && tech != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_UDI_EMBEDDED
+                && tech != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_LVDS
+            {
                 external_count += 1;
             }
         }
