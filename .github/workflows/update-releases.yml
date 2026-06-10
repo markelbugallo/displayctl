@@ -60,7 +60,15 @@ jobs:
 
       - name: Install esbuild
         run: |
-          curl -fsSL https://github.com/evanw/esbuild/releases/download/v0.25.0/esbuild_linux_amd64.zip -o esbuild.zip
+          VERSION_FILE=.github/esbuild-version.txt
+          ESBUILD_VERSION=$(tr -d '[:space:]' < "$VERSION_FILE")
+
+          if [[ ! "$ESBUILD_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Invalid esbuild version in $VERSION_FILE: '$ESBUILD_VERSION'"
+            exit 1
+          fi
+
+          curl -fsSL "https://github.com/evanw/esbuild/releases/download/v${ESBUILD_VERSION}/esbuild_linux_amd64.zip" -o esbuild.zip
           unzip esbuild.zip
           sudo mv esbuild /usr/local/bin/
 
