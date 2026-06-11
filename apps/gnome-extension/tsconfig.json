@@ -5,6 +5,7 @@
     "rootDir": "../..",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "ignoreDeprecations": "6.0",
     "lib": [
       "ES2022"
     ]

@@ -32,6 +32,8 @@ export class IndicatorMenu {
   private primaryMonitorItems = new Map<string, any>();
   private displayLayoutItems = new Map<string, any>();
   private menuOpenId: number | null = null;
+  private brightnessLabelText: string | null = null;
+  private isLidClosedOnlyExternal = false;
   private onPrimaryMonitorSelected: (connector: string) => void;
   private onDisplayModeSelected: (mode: string) => void;
 
@@ -100,6 +102,7 @@ export class IndicatorMenu {
     canApply: boolean,
     isLidClosedOnlyExternal: boolean
   ) {
+    this.isLidClosedOnlyExternal = isLidClosedOnlyExternal;
     if (!this.primaryMonitorItem) {
       return;
     }
@@ -139,17 +142,9 @@ export class IndicatorMenu {
     }
 
     if (isLidClosedOnlyExternal) {
-      this.primaryMonitorItem.menu.close();
-      this.primaryMonitorItem.setSensitive(true);
-      this.primaryMonitorItem.reactive = false;
-      this.primaryMonitorItem.can_focus = false;
-      if (this.primaryMonitorItem.label) {
-        this.primaryMonitorItem.label.set_style('color: white;');
-      }
-      if (this.primaryMonitorItem._triangle) {
-        this.primaryMonitorItem._triangle.visible = false;
-      }
+      this.primaryMonitorItem.hide();
     } else {
+      this.primaryMonitorItem.show();
       this.primaryMonitorItem.setSensitive(canApply);
       this.primaryMonitorItem.reactive = canApply;
       this.primaryMonitorItem.can_focus = canApply;
@@ -160,9 +155,12 @@ export class IndicatorMenu {
         this.primaryMonitorItem._triangle.visible = true;
       }
     }
+
+    this.updateBrightnessSeparatorVisibility();
   }
 
   updateDisplayLayoutMenu(currentMode: string, canApply: boolean, isLidClosedOnlyExternal: boolean) {
+    this.isLidClosedOnlyExternal = isLidClosedOnlyExternal;
     if (!this.displayLayoutItem) {
       return;
     }
@@ -196,18 +194,9 @@ export class IndicatorMenu {
     }
 
     if (isLidClosedOnlyExternal) {
-      this.displayLayoutItem.label.text = 'Solo externa';
-      this.displayLayoutItem.menu.close();
-      this.displayLayoutItem.setSensitive(true);
-      this.displayLayoutItem.reactive = false;
-      this.displayLayoutItem.can_focus = false;
-      if (this.displayLayoutItem.label) {
-        this.displayLayoutItem.label.set_style('color: white;');
-      }
-      if (this.displayLayoutItem._triangle) {
-        this.displayLayoutItem._triangle.visible = false;
-      }
+      this.displayLayoutItem.hide();
     } else {
+      this.displayLayoutItem.show();
       this.displayLayoutItem.setSensitive(canApply);
       this.displayLayoutItem.reactive = canApply;
       this.displayLayoutItem.can_focus = canApply;
@@ -218,9 +207,13 @@ export class IndicatorMenu {
         this.displayLayoutItem._triangle.visible = true;
       }
     }
+
+    this.updateBrightnessSeparatorVisibility();
   }
 
   setBrightnessLabel(label: string | null) {
+    this.brightnessLabelText = label;
+
     if (!this.brightnessLabelItem || !this.brightnessSeparatorItem) {
       return;
     }
@@ -233,7 +226,7 @@ export class IndicatorMenu {
 
     this.brightnessLabelItem.label.text = label;
     this.brightnessLabelItem.show();
-    this.brightnessSeparatorItem.show();
+    this.updateBrightnessSeparatorVisibility();
   }
 
   updateRefreshRateMenu(label: string | null, options: RefreshRateOption[], canApply: boolean): void {
@@ -365,6 +358,19 @@ export class IndicatorMenu {
     }
 
     this.indicator.menu.addMenuItem(this.brightnessItem);
+  }
+
+  private updateBrightnessSeparatorVisibility() {
+    if (!this.brightnessSeparatorItem || !this.brightnessLabelItem) {
+      return;
+    }
+
+    if (!this.brightnessLabelText || this.isLidClosedOnlyExternal) {
+      this.brightnessSeparatorItem.hide();
+      return;
+    }
+
+    this.brightnessSeparatorItem.show();
   }
 
   private setMenuItemOrnament(item: any, active: boolean) {
