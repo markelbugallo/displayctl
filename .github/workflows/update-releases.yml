@@ -68,8 +68,7 @@ jobs:
             exit 1
           fi
 
-          curl -fsSL "https://github.com/evanw/esbuild/releases/download/v${ESBUILD_VERSION}/esbuild_linux_amd64.zip" -o esbuild.zip
-          unzip esbuild.zip
+          curl -fsSL "https://esbuild.github.io/dl/v${ESBUILD_VERSION}" | sh
           sudo mv esbuild /usr/local/bin/
 
       - name: Build and package extension
