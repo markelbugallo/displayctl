@@ -68,8 +68,10 @@ jobs:
             exit 1
           fi
 
-          curl -fsSL "https://esbuild.github.io/dl/v${ESBUILD_VERSION}" | sh
-          sudo mv esbuild /usr/local/bin/
+          curl -fsSL "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-${ESBUILD_VERSION}.tgz" -o esbuild.tgz
+          tar -xz --strip-components=2 -f esbuild.tgz package/bin/esbuild
+          sudo mv esbuild /usr/local/bin/esbuild
+          esbuild --version
 
       - name: Build and package extension
         run: |
