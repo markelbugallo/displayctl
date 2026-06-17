@@ -120,8 +120,8 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             let _ = SetBkMode(mem_hdc, TRANSPARENT);
 
             let font_sub = CreateFontW(
-                (14.0 * scale) as i32, 0, 0, 0, 600, 0, 0, 0, // Semi-bold 600
-                0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
+                -((11.0 * scale) as i32), 0, 0, 0, 600, 0, 0, 0,
+                0, 0, 0, 6,
                 0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
             );
             let old_font = SelectObject(mem_hdc, font_sub);
@@ -138,13 +138,14 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                 };
                 let _ = DrawTextW(mem_hdc, &mut status_text, &mut sub_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
             }
+            let _ = SelectObject(mem_hdc, old_font);
             let _ = DeleteObject(font_sub);
 
             if has_monitor {
                 // --- Monitor Principal Row ---
                 let font_label = CreateFontW(
-                    (18.0 * scale) as i32, 0, 0, 0, 500, 0, 0, 0, // Medium 500
-                    0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
+                    -((13.0 * scale) as i32), 0, 0, 0, 600, 0, 0, 0,
+                    0, 0, 0, 6,
                     0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
                 );
                 let old_font_label = SelectObject(mem_hdc, font_label);
@@ -162,12 +163,12 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                 let _ = SelectObject(mem_hdc, old_font_label);
                 let _ = DeleteObject(font_label);
 
-                let font_text = CreateFontW(
-                    (15.0 * scale) as i32, 0, 0, 0, 400, 0, 0, 0, // Regular 400
-                    0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
+                 let font_text = CreateFontW(
+                    -((12.0 * scale) as i32), 0, 0, 0, 600, 0, 0, 0,
+                    0, 0, 0, 6,
                     0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
                 );
-                let _ = SelectObject(mem_hdc, font_text);
+                let old_font_text = SelectObject(mem_hdc, font_text);
 
                 let btn_bg_color = if is_light { COLORREF(0x00FFFFFF) } else { COLORREF(0x003D3D3D) };
                 let btn_border_color = if is_light { COLORREF(0x00D0D0D0) } else { COLORREF(0x00454545) };
@@ -210,12 +211,12 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                 };
                 let _ = DrawTextW(mem_hdc, &mut btn_text1, &mut btn_text_rect1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-                let font_icon_small = CreateFontW(
-                    (10.0 * scale) as i32, 0, 0, 0, 400, 0, 0, 0,
-                    0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
+                 let font_icon_small = CreateFontW(
+                    -((8.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0,
+                    0, 0, 0, 6,
                     0, PCWSTR(encode_wide("Segoe MDL2 Assets").as_ptr()),
                 );
-                let _ = SelectObject(mem_hdc, font_icon_small);
+                let old_font_icon = SelectObject(mem_hdc, font_icon_small);
                 let mut arrow_text = encode_wide("\u{E70D}");
                 let mut arrow_rect1 = RECT { 
                     left: (302.0 * scale) as i32, 
@@ -225,7 +226,8 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                 };
                 let _ = DrawTextW(mem_hdc, &mut arrow_text, &mut arrow_rect1, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
                 
-                let _ = SelectObject(mem_hdc, font_text); // restore font_text for refresh rate button
+                let _ = SelectObject(mem_hdc, old_font_icon);
+                let _ = DeleteObject(font_icon_small);
 
                 // --- Separator line (below primary monitor row) ---
                 let sep_color = if is_light { COLORREF(0x00D0D0D0) } else { COLORREF(0x003B3B3B) };
@@ -238,11 +240,11 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
 
                 // --- Monitor label (below separator) ---
                 let font_monitor_label = CreateFontW(
-                    (13.0 * scale) as i32, 0, 0, 0, 400, 0, 0, 0,
-                    0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
+                    -((12.0 * scale) as i32), 0, 0, 0, 700, 0, 0, 0, 
+                    0, 0, 0, 6,
                     0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
                 );
-                let _ = SelectObject(mem_hdc, font_monitor_label);
+                let old_font_monitor = SelectObject(mem_hdc, font_monitor_label);
                 let monitor_label_color = if is_light { COLORREF(0x008E8E8E) } else { COLORREF(0x008E8E8E) };
                 let _ = SetTextColor(mem_hdc, monitor_label_color);
                 let monitor_label_str = monitor_name.unwrap_or_else(|| "Integrada".to_string());
@@ -259,12 +261,13 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                     bottom: (74.0 * scale) as i32 
                 };
                 let _ = DrawTextW(mem_hdc, &mut monitor_label_text, &mut monitor_label_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                let _ = SelectObject(mem_hdc, old_font_monitor);
                 let _ = DeleteObject(font_monitor_label);
 
                 // --- Refresh Rate Row ---
                 let font_label = CreateFontW(
-                    (18.0 * scale) as i32, 0, 0, 0, 500, 0, 0, 0, // Medium 500
-                    0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
+                    -((13.0 * scale) as i32), 0, 0, 0, 600, 0, 0, 0,
+                    0, 0, 0, 6,
                     0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
                 );
                 let old_font_label = SelectObject(mem_hdc, font_label);
@@ -301,7 +304,7 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                 let _ = SelectObject(mem_hdc, old_pen);
                 let _ = DeleteObject(btn_pen2);
 
-                let _ = SelectObject(mem_hdc, font_text); // ensure font_text is selected for Hz label
+                let _ = SelectObject(mem_hdc, font_text);
                 let mut btn_text2 = encode_wide(&format!("{} Hz", current_refresh_rate));
                 let mut btn_text_rect2 = RECT { 
                     left: (228.0 * scale) as i32, 
@@ -311,7 +314,12 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                 };
                 let _ = DrawTextW(mem_hdc, &mut btn_text2, &mut btn_text_rect2, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-                let _ = SelectObject(mem_hdc, font_icon_small);
+                let font_icon_small = CreateFontW(
+                    -((8.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0,
+                    0, 0, 0, 6,
+                    0, PCWSTR(encode_wide("Segoe MDL2 Assets").as_ptr()),
+                );
+                let old_font_icon = SelectObject(mem_hdc, font_icon_small);
                 let mut arrow_text = encode_wide("\u{E70D}");
                 let mut arrow_rect2 = RECT { 
                     left: (302.0 * scale) as i32, 
@@ -320,16 +328,22 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                     bottom: (112.0 * scale) as i32 
                 };
                 let _ = DrawTextW(mem_hdc, &mut arrow_text, &mut arrow_rect2, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+                
+                // Deselect and delete font_icon_small
+                let _ = SelectObject(mem_hdc, old_font_icon);
                 let _ = DeleteObject(font_icon_small);
+
+                // Now restore old_font_text (the default font) and delete font_text
+                let _ = SelectObject(mem_hdc, old_font_text);
                 let _ = DeleteObject(font_text);
 
                 // --- Brightness Slider ---
                 let font_icon = CreateFontW(
-                    (15.0 * scale) as i32, 0, 0, 0, 400, 0, 0, 0,
-                    0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
+                    -((12.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0,
+                    0, 0, 0, 6,
                     0, PCWSTR(encode_wide("Segoe MDL2 Assets").as_ptr()),
                 );
-                let _ = SelectObject(mem_hdc, font_icon);
+                let old_font_slider = SelectObject(mem_hdc, font_icon);
                 let _ = SetTextColor(mem_hdc, text_color);
                 let mut icon_text = encode_wide("\u{E706}");
                 let mut icon_rect = RECT { 
@@ -339,6 +353,7 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                     bottom: (146.0 * scale) as i32 
                 };
                 let _ = DrawTextW(mem_hdc, &mut icon_text, &mut icon_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+                let _ = SelectObject(mem_hdc, old_font_slider);
                 let _ = DeleteObject(font_icon);
 
                 let accent_color = if is_light { COLORREF(0x00C06700) } else { COLORREF(0x00FFCD60) };

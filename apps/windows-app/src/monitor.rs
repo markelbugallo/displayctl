@@ -54,7 +54,8 @@ pub fn count_external_monitors() -> usize {
         }
 
         let mut external_count = 0;
-        for path in &paths[..num_paths as usize] {
+        let limit = (num_paths as usize).min(paths.len());
+        for path in &paths[..limit] {
             let tech = path.targetInfo.outputTechnology;
             if tech != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL
                 && tech != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED
@@ -99,13 +100,8 @@ pub fn get_friendly_name_for_hmonitor(hmon: HMONITOR) -> Option<String> {
         if !GetMonitorInfoW(hmon, &mut info as *mut _ as *mut _).as_bool() {
             return None;
         }
-        let gdi_device_name = String::from_utf16_lossy(
-            &info.szDevice
-                .iter()
-                .take_while(|&&c| c != 0)
-                .cloned()
-                .collect::<Vec<u16>>()
-        );
+        let len = info.szDevice.iter().position(|&c| c == 0).unwrap_or(info.szDevice.len());
+        let gdi_device_name = String::from_utf16_lossy(&info.szDevice[..len]);
 
         let mut num_paths = 0;
         let mut num_modes = 0;
@@ -126,7 +122,8 @@ pub fn get_friendly_name_for_hmonitor(hmon: HMONITOR) -> Option<String> {
             return None;
         }
 
-        for path in &paths[..num_paths as usize] {
+        let limit = (num_paths as usize).min(paths.len());
+        for path in &paths[..limit] {
             let mut source_name = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
             source_name.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
             source_name.header.size = std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
@@ -134,13 +131,8 @@ pub fn get_friendly_name_for_hmonitor(hmon: HMONITOR) -> Option<String> {
             source_name.header.id = path.sourceInfo.id;
 
             if DisplayConfigGetDeviceInfo(&mut source_name.header) == 0 {
-                let path_gdi_name = String::from_utf16_lossy(
-                    &source_name.viewGdiDeviceName
-                        .iter()
-                        .take_while(|&&c| c != 0)
-                        .cloned()
-                        .collect::<Vec<u16>>()
-                );
+                let len = source_name.viewGdiDeviceName.iter().position(|&c| c == 0).unwrap_or(source_name.viewGdiDeviceName.len());
+                let path_gdi_name = String::from_utf16_lossy(&source_name.viewGdiDeviceName[..len]);
 
                 if path_gdi_name.trim().eq_ignore_ascii_case(gdi_device_name.trim()) {
                     let mut target_name = DISPLAYCONFIG_TARGET_DEVICE_NAME::default();
@@ -150,13 +142,8 @@ pub fn get_friendly_name_for_hmonitor(hmon: HMONITOR) -> Option<String> {
                     target_name.header.id = path.targetInfo.id;
 
                     if DisplayConfigGetDeviceInfo(&mut target_name.header) == 0 {
-                        let friendly_name = String::from_utf16_lossy(
-                            &target_name.monitorFriendlyDeviceName
-                                .iter()
-                                .take_while(|&&c| c != 0)
-                                .cloned()
-                                .collect::<Vec<u16>>()
-                        );
+                        let len = target_name.monitorFriendlyDeviceName.iter().position(|&c| c == 0).unwrap_or(target_name.monitorFriendlyDeviceName.len());
+                        let friendly_name = String::from_utf16_lossy(&target_name.monitorFriendlyDeviceName[..len]);
                         let name_trimmed = friendly_name.trim().to_string();
                         if !name_trimmed.is_empty() {
                             return Some(name_trimmed);
@@ -196,13 +183,8 @@ pub fn detect_ddc_monitors() -> Vec<DdcMonitor> {
                                 let mut info = MONITORINFOEXW::default();
                                 info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
                                 let gdi_device_name = if GetMonitorInfoW(hmon, &mut info as *mut _ as *mut _).as_bool() {
-                                    String::from_utf16_lossy(
-                                        &info.szDevice
-                                            .iter()
-                                            .take_while(|&&c| c != 0)
-                                            .cloned()
-                                            .collect::<Vec<u16>>()
-                                    )
+                                    let len = info.szDevice.iter().position(|&c| c == 0).unwrap_or(info.szDevice.len());
+                                    String::from_utf16_lossy(&info.szDevice[..len])
                                 } else {
                                     String::new()
                                 };
@@ -339,14 +321,9 @@ pub fn get_active_monitors() -> Vec<ActiveMonitor> {
             let mut info = MONITORINFOEXW::default();
             info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
             if GetMonitorInfoW(hmon, &mut info as *mut _ as *mut _).as_bool() {
-                let gdi_device_name = String::from_utf16_lossy(
-                    &info.szDevice
-                        .iter()
-                        .take_while(|&&c| c != 0)
-                        .cloned()
-                        .collect::<Vec<u16>>()
-                );
-                let is_primary = (info.monitorInfo.dwFlags & 1) != 0; // MONITORINFOF_PRIMARY is 1
+                let len = info.szDevice.iter().position(|&c| c == 0).unwrap_or(info.szDevice.len());
+                let gdi_device_name = String::from_utf16_lossy(&info.szDevice[..len]);
+                let is_primary = (info.monitorInfo.dwFlags & 1) != 0;
                 
                 let friendly_name = if is_hmonitor_internal(hmon) {
                     "Integrada".to_string()
@@ -382,13 +359,8 @@ pub fn set_primary_monitor(target_gdi_name: &str) -> bool {
             let mut info = MONITORINFOEXW::default();
             info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
             if GetMonitorInfoW(*hmon, &mut info as *mut _ as *mut _).as_bool() {
-                let gdi_name = String::from_utf16_lossy(
-                    &info.szDevice
-                        .iter()
-                        .take_while(|&&c| c != 0)
-                        .cloned()
-                        .collect::<Vec<u16>>()
-                );
+                let len = info.szDevice.iter().position(|&c| c == 0).unwrap_or(info.szDevice.len());
+                let gdi_name = String::from_utf16_lossy(&info.szDevice[..len]);
                 
                 let device_wide = crate::utils::encode_wide(&gdi_name);
                 let mut devmode = DEVMODEW::default();
@@ -470,13 +442,8 @@ pub fn is_hmonitor_external(hmon: HMONITOR) -> bool {
         if !GetMonitorInfoW(hmon, &mut info as *mut _ as *mut _).as_bool() {
             return false;
         }
-        let gdi_device_name = String::from_utf16_lossy(
-            &info.szDevice
-                .iter()
-                .take_while(|&&c| c != 0)
-                .cloned()
-                .collect::<Vec<u16>>()
-        );
+        let len = info.szDevice.iter().position(|&c| c == 0).unwrap_or(info.szDevice.len());
+        let gdi_device_name = String::from_utf16_lossy(&info.szDevice[..len]);
 
         let mut num_paths = 0;
         let mut num_modes = 0;
@@ -497,7 +464,8 @@ pub fn is_hmonitor_external(hmon: HMONITOR) -> bool {
             return false;
         }
 
-        for path in &paths[..num_paths as usize] {
+        let limit = (num_paths as usize).min(paths.len());
+        for path in &paths[..limit] {
             let mut source_name = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
             source_name.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
             source_name.header.size = std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
@@ -505,13 +473,8 @@ pub fn is_hmonitor_external(hmon: HMONITOR) -> bool {
             source_name.header.id = path.sourceInfo.id;
 
             if DisplayConfigGetDeviceInfo(&mut source_name.header) == 0 {
-                let path_gdi_name = String::from_utf16_lossy(
-                    &source_name.viewGdiDeviceName
-                        .iter()
-                        .take_while(|&&c| c != 0)
-                        .cloned()
-                        .collect::<Vec<u16>>()
-                );
+                let len = source_name.viewGdiDeviceName.iter().position(|&c| c == 0).unwrap_or(source_name.viewGdiDeviceName.len());
+                let path_gdi_name = String::from_utf16_lossy(&source_name.viewGdiDeviceName[..len]);
 
                 if path_gdi_name.trim().eq_ignore_ascii_case(gdi_device_name.trim()) {
                     let tech = path.targetInfo.outputTechnology;
@@ -533,13 +496,8 @@ pub fn is_hmonitor_internal(hmon: HMONITOR) -> bool {
         if !GetMonitorInfoW(hmon, &mut info as *mut _ as *mut _).as_bool() {
             return false;
         }
-        let gdi_device_name = String::from_utf16_lossy(
-            &info.szDevice
-                .iter()
-                .take_while(|&&c| c != 0)
-                .cloned()
-                .collect::<Vec<u16>>()
-        );
+        let len = info.szDevice.iter().position(|&c| c == 0).unwrap_or(info.szDevice.len());
+        let gdi_device_name = String::from_utf16_lossy(&info.szDevice[..len]);
 
         let mut num_paths = 0;
         let mut num_modes = 0;
@@ -560,7 +518,8 @@ pub fn is_hmonitor_internal(hmon: HMONITOR) -> bool {
             return false;
         }
 
-        for path in &paths[..num_paths as usize] {
+        let limit = (num_paths as usize).min(paths.len());
+        for path in &paths[..limit] {
             let mut source_name = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
             source_name.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
             source_name.header.size = std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
@@ -568,13 +527,8 @@ pub fn is_hmonitor_internal(hmon: HMONITOR) -> bool {
             source_name.header.id = path.sourceInfo.id;
 
             if DisplayConfigGetDeviceInfo(&mut source_name.header) == 0 {
-                let path_gdi_name = String::from_utf16_lossy(
-                    &source_name.viewGdiDeviceName
-                        .iter()
-                        .take_while(|&&c| c != 0)
-                        .cloned()
-                        .collect::<Vec<u16>>()
-                );
+                let len = source_name.viewGdiDeviceName.iter().position(|&c| c == 0).unwrap_or(source_name.viewGdiDeviceName.len());
+                let path_gdi_name = String::from_utf16_lossy(&source_name.viewGdiDeviceName[..len]);
 
                 if path_gdi_name.trim().eq_ignore_ascii_case(gdi_device_name.trim()) {
                     let tech = path.targetInfo.outputTechnology;

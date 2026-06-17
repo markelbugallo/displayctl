@@ -74,26 +74,19 @@ unsafe fn create_icon_from_png(png_bytes: &[u8]) -> Result<HICON, Box<dyn std::e
     let mut bgra_pixels = vec![0u8; (width * height * 4) as usize];
     match info.color_type {
         png::ColorType::Rgba => {
-            for i in 0..(width * height) as usize {
-                let r = buf[i * 4];
-                let g = buf[i * 4 + 1];
-                let b = buf[i * 4 + 2];
-                let a = buf[i * 4 + 3];
-                bgra_pixels[i * 4] = b;
-                bgra_pixels[i * 4 + 1] = g;
-                bgra_pixels[i * 4 + 2] = r;
-                bgra_pixels[i * 4 + 3] = a;
+            for (src, dest) in buf.chunks_exact(4).zip(bgra_pixels.chunks_exact_mut(4)) {
+                dest[0] = src[2];
+                dest[1] = src[1];
+                dest[2] = src[0];
+                dest[3] = src[3];
             }
         }
         png::ColorType::Rgb => {
-            for i in 0..(width * height) as usize {
-                let r = buf[i * 3];
-                let g = buf[i * 3 + 1];
-                let b = buf[i * 3 + 2];
-                bgra_pixels[i * 4] = b;
-                bgra_pixels[i * 4 + 1] = g;
-                bgra_pixels[i * 4 + 2] = r;
-                bgra_pixels[i * 4 + 3] = 255;
+            for (src, dest) in buf.chunks_exact(3).zip(bgra_pixels.chunks_exact_mut(4)) {
+                dest[0] = src[2];
+                dest[1] = src[1];
+                dest[2] = src[0];
+                dest[3] = 255;
             }
         }
         _ => return Err("Unsupported color type".into()),
@@ -135,6 +128,7 @@ unsafe fn create_icon_from_png(png_bytes: &[u8]) -> Result<HICON, Box<dyn std::e
         Some(mask_bits.as_ptr() as *const _),
     );
     if hbm_mask.0.is_null() {
+        let _ = DeleteObject(hbm_color);
         return Err("CreateBitmap failed".into());
     }
 
@@ -146,7 +140,14 @@ unsafe fn create_icon_from_png(png_bytes: &[u8]) -> Result<HICON, Box<dyn std::e
         hbmColor: hbm_color,
     };
 
-    let hicon = CreateIconIndirect(&icon_info)?;
+    let hicon = match CreateIconIndirect(&icon_info) {
+        Ok(hicon) => hicon,
+        Err(err) => {
+            let _ = DeleteObject(hbm_color);
+            let _ = DeleteObject(hbm_mask);
+            return Err(err.into());
+        }
+    };
 
     let _ = DeleteObject(hbm_color);
     let _ = DeleteObject(hbm_mask);

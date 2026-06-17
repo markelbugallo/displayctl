@@ -218,7 +218,7 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
 
             let _ = SetBkMode(mem_hdc, TRANSPARENT);
             let font = CreateFontW(
-                (15.0 * scale) as i32, 0, 0, 0, 400, 0, 0, 0,
+                -((12.0 * scale) as i32), 0, 0, 0, 600, 0, 0, 0,
                 0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
                 0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
             );
