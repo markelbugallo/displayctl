@@ -268,6 +268,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(console_ctrl_handler), true);
 
+        // Enable Per-Monitor V2 DPI awareness for crisp text rendering
+        #[link(name = "user32")]
+        extern "system" {
+            fn SetProcessDpiAwarenessContext(value: isize) -> BOOL;
+        }
+        const DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2: isize = -4;
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
         let class_name = encode_wide("BrightnessWindowClass");
         let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None)?;
         let hinstance = HINSTANCE(instance.0);

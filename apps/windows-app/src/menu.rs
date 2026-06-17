@@ -22,12 +22,10 @@ use windows::Win32::Graphics::Dwm::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos,
-    GetSystemMetrics, RegisterClassW, SetForegroundWindow, ShowWindow,
+    RegisterClassW, SetForegroundWindow, ShowWindow,
     WNDCLASSW, WM_ACTIVATE, WM_DESTROY, WM_LBUTTONUP, WM_LBUTTONDOWN,
     WM_MOUSEMOVE, WM_PAINT, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
-    SW_SHOW, SM_CYSCREEN, HCURSOR, PostMessageW,
-    SystemParametersInfoW, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    WM_ERASEBKGND,
+    SW_SHOW, HCURSOR, PostMessageW, WM_ERASEBKGND,
 };
 
 #[link(name = "user32")]
@@ -44,6 +42,7 @@ extern "system" {
     ) -> BOOL;
     fn SetCapture(hWnd: HWND) -> HWND;
     fn ReleaseCapture() -> BOOL;
+    fn GetDpiForWindow(hwnd: HWND) -> u32;
 }
 
 const WS_EX_LAYERED: u32 = 0x00080000;
@@ -63,6 +62,8 @@ pub(crate) struct MenuState {
     pub(crate) refresh_rates: Vec<u32>,
     pub(crate) current_refresh_rate: u32,
     pub(crate) dropdown_hwnd: Option<HWND>,
+    pub(crate) active_monitors: Vec<crate::monitor::ActiveMonitor>,
+    pub(crate) scale: f32,
 }
 
 unsafe impl Send for MenuState {}
@@ -81,7 +82,7 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             let hdc = BeginPaint(hwnd, &mut ps);
 
             let is_light = is_light_theme();
-            let (monitor_name, has_monitor, slider_value, current_refresh_rate) = {
+            let (monitor_name, has_monitor, slider_value, current_refresh_rate, active_monitors, scale) = {
                 let state_opt = MENU_STATE.lock().unwrap();
                 state_opt.as_ref().map(|s| {
                     (
@@ -89,8 +90,10 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                         !s.monitors.is_empty(),
                         s.slider_value,
                         s.current_refresh_rate,
+                        s.active_monitors.clone(),
+                        s.scale,
                     )
-                }).unwrap_or((None, false, 50, 60))
+                }).unwrap_or((None, false, 50, 60, Vec::new(), 1.0))
             };
 
             let mut rect = RECT::default();
@@ -117,117 +120,260 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             let _ = SetBkMode(mem_hdc, TRANSPARENT);
 
             let font_sub = CreateFontW(
-                14, 0, 0, 0, 600, 0, 0, 0, // Semi-bold 600
-                0, 0, 0, 4,
+                (14.0 * scale) as i32, 0, 0, 0, 600, 0, 0, 0, // Semi-bold 600
+                0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
                 0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
             );
             let old_font = SelectObject(mem_hdc, font_sub);
-            let status_text_color = if is_light { COLORREF(0x008E8E8E) } else { COLORREF(0x008E8E8E) };
-            let _ = SetTextColor(mem_hdc, status_text_color);
 
-            let status_text_str = if has_monitor {
-                monitor_name.unwrap_or_else(|| "Monitor externo".to_string())
-            } else {
-                "No se detectaron monitores externos".to_string()
-            };
-            let mut status_text = encode_wide(&status_text_str);
-            let mut sub_rect = RECT { left: 16, top: 16, right: 284, bottom: 32 };
-            let _ = DrawTextW(mem_hdc, &mut status_text, &mut sub_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            if !has_monitor {
+                let status_text_color = if is_light { COLORREF(0x008E8E8E) } else { COLORREF(0x008E8E8E) };
+                let _ = SetTextColor(mem_hdc, status_text_color);
+                let mut status_text = encode_wide("No se detectaron monitores externos");
+                let mut sub_rect = RECT { 
+                    left: (20.0 * scale) as i32, 
+                    top: 0, 
+                    right: width - (20.0 * scale) as i32, 
+                    bottom: height 
+                };
+                let _ = DrawTextW(mem_hdc, &mut status_text, &mut sub_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            }
             let _ = DeleteObject(font_sub);
 
             if has_monitor {
-                // --- 4a. Refresh Rate Row ---
+                // --- Monitor Principal Row ---
                 let font_label = CreateFontW(
-                    18, 0, 0, 0, 500, 0, 0, 0, // Medium 500, size 18
-                    0, 0, 0, 4,
+                    (18.0 * scale) as i32, 0, 0, 0, 500, 0, 0, 0, // Medium 500
+                    0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
                     0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
                 );
                 let old_font_label = SelectObject(mem_hdc, font_label);
                 let _ = SetTextColor(mem_hdc, text_color);
-                
-                let mut label_text = encode_wide("Tasa de refresco");
-                let mut label_rect = RECT { left: 16, top: 44, right: 168, bottom: 74 };
+
+                let mut label_text = encode_wide("Monitor principal");
+                let mut label_rect = RECT { 
+                    left: (20.0 * scale) as i32, 
+                    top: (12.0 * scale) as i32, 
+                    right: width - (130.0 * scale) as i32, 
+                    bottom: (44.0 * scale) as i32 
+                };
                 let _ = DrawTextW(mem_hdc, &mut label_text, &mut label_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-                
+
                 let _ = SelectObject(mem_hdc, old_font_label);
                 let _ = DeleteObject(font_label);
 
                 let font_text = CreateFontW(
-                    16, 0, 0, 0, 400, 0, 0, 0, // Regular 400, size 16
-                    0, 0, 0, 4,
+                    (15.0 * scale) as i32, 0, 0, 0, 400, 0, 0, 0, // Regular 400
+                    0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
                     0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
                 );
                 let _ = SelectObject(mem_hdc, font_text);
 
                 let btn_bg_color = if is_light { COLORREF(0x00FFFFFF) } else { COLORREF(0x003D3D3D) };
                 let btn_border_color = if is_light { COLORREF(0x00D0D0D0) } else { COLORREF(0x00454545) };
-                let btn_rect = RECT { left: 204, top: 44, right: 304, bottom: 74 };
                 
-                let btn_brush = CreateSolidBrush(btn_bg_color);
-                let old_brush = SelectObject(mem_hdc, btn_brush);
-                let btn_pen = CreatePen(windows::Win32::Graphics::Gdi::PS_SOLID, 1, btn_border_color);
-                let old_pen = SelectObject(mem_hdc, btn_pen);
-                
-                let _ = RoundRect(mem_hdc, btn_rect.left, btn_rect.top, btn_rect.right, btn_rect.bottom, 4, 4);
-                
-                let _ = SelectObject(mem_hdc, old_brush);
-                let _ = DeleteObject(btn_brush);
-                let _ = SelectObject(mem_hdc, old_pen);
-                let _ = DeleteObject(btn_pen);
+                // Primary monitor button rect
+                let btn_rect1 = RECT { 
+                    left: (220.0 * scale) as i32, 
+                    top: (12.0 * scale) as i32, 
+                    right: (320.0 * scale) as i32, 
+                    bottom: (44.0 * scale) as i32 
+                };
+                let btn_brush1 = CreateSolidBrush(btn_bg_color);
+                let old_brush = SelectObject(mem_hdc, btn_brush1);
+                let btn_pen1 = CreatePen(windows::Win32::Graphics::Gdi::PS_SOLID, 1, btn_border_color);
+                let old_pen = SelectObject(mem_hdc, btn_pen1);
 
-                let mut btn_text = encode_wide(&format!("{} Hz", current_refresh_rate));
-                let mut btn_text_rect = RECT { left: 214, top: 44, right: 286, bottom: 74 };
-                let _ = DrawTextW(mem_hdc, &mut btn_text, &mut btn_text_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                let _ = RoundRect(mem_hdc, btn_rect1.left, btn_rect1.top, btn_rect1.right, btn_rect1.bottom, 4, 4);
+
+                let _ = SelectObject(mem_hdc, old_brush);
+                let _ = DeleteObject(btn_brush1);
+                let _ = SelectObject(mem_hdc, old_pen);
+                let _ = DeleteObject(btn_pen1);
+
+                let primary_monitor_name = active_monitors.iter()
+                    .find(|m| m.is_primary)
+                    .map(|m| m.friendly_name.clone())
+                    .unwrap_or_else(|| "Principal".to_string());
+                let display_primary_name = if primary_monitor_name.chars().count() > 10 {
+                    primary_monitor_name.chars().take(8).collect::<String>() + "..."
+                } else {
+                    primary_monitor_name
+                };
+
+                let mut btn_text1 = encode_wide(&display_primary_name);
+                let mut btn_text_rect1 = RECT { 
+                    left: (228.0 * scale) as i32, 
+                    top: (12.0 * scale) as i32, 
+                    right: (302.0 * scale) as i32, 
+                    bottom: (44.0 * scale) as i32 
+                };
+                let _ = DrawTextW(mem_hdc, &mut btn_text1, &mut btn_text_rect1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
                 let font_icon_small = CreateFontW(
-                    10, 0, 0, 0, 400, 0, 0, 0,
-                    0, 0, 0, 4,
+                    (10.0 * scale) as i32, 0, 0, 0, 400, 0, 0, 0,
+                    0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
                     0, PCWSTR(encode_wide("Segoe MDL2 Assets").as_ptr()),
                 );
                 let _ = SelectObject(mem_hdc, font_icon_small);
                 let mut arrow_text = encode_wide("\u{E70D}");
-                let mut arrow_rect = RECT { left: 286, top: 44, right: 300, bottom: 74 };
-                let _ = DrawTextW(mem_hdc, &mut arrow_text, &mut arrow_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+                let mut arrow_rect1 = RECT { 
+                    left: (302.0 * scale) as i32, 
+                    top: (12.0 * scale) as i32, 
+                    right: (318.0 * scale) as i32, 
+                    bottom: (44.0 * scale) as i32 
+                };
+                let _ = DrawTextW(mem_hdc, &mut arrow_text, &mut arrow_rect1, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+                
+                let _ = SelectObject(mem_hdc, font_text); // restore font_text for refresh rate button
+
+                // --- Separator line (below primary monitor row) ---
+                let sep_color = if is_light { COLORREF(0x00D0D0D0) } else { COLORREF(0x003B3B3B) };
+                let sep_pen = CreatePen(windows::Win32::Graphics::Gdi::PS_SOLID, 1, sep_color);
+                let old_sep_pen = SelectObject(mem_hdc, sep_pen);
+                let _ = windows::Win32::Graphics::Gdi::MoveToEx(mem_hdc, (20.0 * scale) as i32, (54.0 * scale) as i32, None);
+                let _ = windows::Win32::Graphics::Gdi::LineTo(mem_hdc, width - (20.0 * scale) as i32, (54.0 * scale) as i32);
+                let _ = SelectObject(mem_hdc, old_sep_pen);
+                let _ = DeleteObject(sep_pen);
+
+                // --- Monitor label (below separator) ---
+                let font_monitor_label = CreateFontW(
+                    (13.0 * scale) as i32, 0, 0, 0, 400, 0, 0, 0,
+                    0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
+                    0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
+                );
+                let _ = SelectObject(mem_hdc, font_monitor_label);
+                let monitor_label_color = if is_light { COLORREF(0x008E8E8E) } else { COLORREF(0x008E8E8E) };
+                let _ = SetTextColor(mem_hdc, monitor_label_color);
+                let monitor_label_str = monitor_name.unwrap_or_else(|| "Integrada".to_string());
+                let monitor_label_display = if monitor_label_str.chars().count() > 20 {
+                    "Integrada".to_string()
+                } else {
+                    monitor_label_str
+                };
+                let mut monitor_label_text = encode_wide(&monitor_label_display);
+                let mut monitor_label_rect = RECT { 
+                    left: (20.0 * scale) as i32, 
+                    top: (58.0 * scale) as i32, 
+                    right: width - (20.0 * scale) as i32, 
+                    bottom: (74.0 * scale) as i32 
+                };
+                let _ = DrawTextW(mem_hdc, &mut monitor_label_text, &mut monitor_label_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                let _ = DeleteObject(font_monitor_label);
+
+                // --- Refresh Rate Row ---
+                let font_label = CreateFontW(
+                    (18.0 * scale) as i32, 0, 0, 0, 500, 0, 0, 0, // Medium 500
+                    0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
+                    0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
+                );
+                let old_font_label = SelectObject(mem_hdc, font_label);
+                let _ = SetTextColor(mem_hdc, text_color);
+
+                let mut label_text = encode_wide("Tasa de refresco");
+                let mut label_rect = RECT { 
+                    left: (20.0 * scale) as i32, 
+                    top: (80.0 * scale) as i32, 
+                    right: width - (130.0 * scale) as i32, 
+                    bottom: (112.0 * scale) as i32 
+                };
+                let _ = DrawTextW(mem_hdc, &mut label_text, &mut label_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+                let _ = SelectObject(mem_hdc, old_font_label);
+                let _ = DeleteObject(font_label);
+
+                // Draw refresh rate button
+                let btn_rect2 = RECT { 
+                    left: (220.0 * scale) as i32, 
+                    top: (80.0 * scale) as i32, 
+                    right: (320.0 * scale) as i32, 
+                    bottom: (112.0 * scale) as i32 
+                };
+                let btn_brush2 = CreateSolidBrush(btn_bg_color);
+                let old_brush = SelectObject(mem_hdc, btn_brush2);
+                let btn_pen2 = CreatePen(windows::Win32::Graphics::Gdi::PS_SOLID, 1, btn_border_color);
+                let old_pen = SelectObject(mem_hdc, btn_pen2);
+
+                let _ = RoundRect(mem_hdc, btn_rect2.left, btn_rect2.top, btn_rect2.right, btn_rect2.bottom, 4, 4);
+
+                let _ = SelectObject(mem_hdc, old_brush);
+                let _ = DeleteObject(btn_brush2);
+                let _ = SelectObject(mem_hdc, old_pen);
+                let _ = DeleteObject(btn_pen2);
+
+                let _ = SelectObject(mem_hdc, font_text); // ensure font_text is selected for Hz label
+                let mut btn_text2 = encode_wide(&format!("{} Hz", current_refresh_rate));
+                let mut btn_text_rect2 = RECT { 
+                    left: (228.0 * scale) as i32, 
+                    top: (80.0 * scale) as i32, 
+                    right: (302.0 * scale) as i32, 
+                    bottom: (112.0 * scale) as i32 
+                };
+                let _ = DrawTextW(mem_hdc, &mut btn_text2, &mut btn_text_rect2, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+                let _ = SelectObject(mem_hdc, font_icon_small);
+                let mut arrow_text = encode_wide("\u{E70D}");
+                let mut arrow_rect2 = RECT { 
+                    left: (302.0 * scale) as i32, 
+                    top: (80.0 * scale) as i32, 
+                    right: (318.0 * scale) as i32, 
+                    bottom: (112.0 * scale) as i32 
+                };
+                let _ = DrawTextW(mem_hdc, &mut arrow_text, &mut arrow_rect2, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
                 let _ = DeleteObject(font_icon_small);
                 let _ = DeleteObject(font_text);
 
-                // Brightness Slider
+                // --- Brightness Slider ---
                 let font_icon = CreateFontW(
-                    14, 0, 0, 0, 400, 0, 0, 0,
-                    0, 0, 0, 4,
+                    (15.0 * scale) as i32, 0, 0, 0, 400, 0, 0, 0,
+                    0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
                     0, PCWSTR(encode_wide("Segoe MDL2 Assets").as_ptr()),
                 );
                 let _ = SelectObject(mem_hdc, font_icon);
                 let _ = SetTextColor(mem_hdc, text_color);
                 let mut icon_text = encode_wide("\u{E706}");
-                let mut icon_rect = RECT { left: 16, top: 88, right: 36, bottom: 112 };
+                let mut icon_rect = RECT { 
+                    left: (20.0 * scale) as i32, 
+                    top: (122.0 * scale) as i32, 
+                    right: (42.0 * scale) as i32, 
+                    bottom: (146.0 * scale) as i32 
+                };
                 let _ = DrawTextW(mem_hdc, &mut icon_text, &mut icon_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
                 let _ = DeleteObject(font_icon);
 
                 let accent_color = if is_light { COLORREF(0x00C06700) } else { COLORREF(0x00FFCD60) };
                 let track_bg = if is_light { COLORREF(0x00E5E5E5) } else { COLORREF(0x00454545) };
 
-                let x_thumb = 50 + (248 * slider_value / 100) as i32;
+                let x_thumb = ((48.0 + (272.0 * slider_value as f32 / 100.0)) * scale) as i32;
 
                 let null_pen = CreatePen(PS_NULL, 0, COLORREF(0));
                 let old_pen = SelectObject(mem_hdc, null_pen);
 
                 let inactive_brush = CreateSolidBrush(track_bg);
                 let old_brush = SelectObject(mem_hdc, inactive_brush);
-                let _ = RoundRect(mem_hdc, 44, 98, 304, 102, 4, 4);
+                let _ = RoundRect(mem_hdc, (48.0 * scale) as i32, (132.0 * scale) as i32, (320.0 * scale) as i32, (136.0 * scale) as i32, 4, 4);
                 let _ = SelectObject(mem_hdc, old_brush);
                 let _ = DeleteObject(inactive_brush);
 
                 let active_brush = CreateSolidBrush(accent_color);
                 let old_brush = SelectObject(mem_hdc, active_brush);
-                let _ = RoundRect(mem_hdc, 44, 98, x_thumb, 102, 4, 4);
+                let _ = RoundRect(mem_hdc, (48.0 * scale) as i32, (132.0 * scale) as i32, x_thumb, (136.0 * scale) as i32, 4, 4);
                 let _ = SelectObject(mem_hdc, old_brush);
                 let _ = DeleteObject(active_brush);
 
                 let _ = SelectObject(mem_hdc, old_pen);
                 let _ = DeleteObject(null_pen);
 
-                self::paint::draw_antialiased_thumb(mem_hdc, x_thumb, 100, is_light, accent_color);
+                self::paint::draw_antialiased_thumb(
+                    mem_hdc,
+                    x_thumb,
+                    (134.0 * scale) as i32,
+                    is_light,
+                    accent_color,
+                    (48.0 * scale) as i32,
+                    (320.0 * scale) as i32,
+                    scale,
+                );
             }
 
             let _ = SelectObject(mem_hdc, old_font);
@@ -244,22 +390,36 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
 
-            let has_monitor = {
+            let (has_monitor, scale) = {
                 let state_opt = MENU_STATE.lock().unwrap();
-                state_opt.as_ref().map(|s| !s.monitors.is_empty()).unwrap_or(false)
+                state_opt.as_ref().map(|s| (!s.monitors.is_empty(), s.scale)).unwrap_or((false, 1.0))
             };
 
-            // Hit detection for dropdown button
-            if has_monitor && x >= 204 && x <= 304 && y >= 44 && y <= 74 {
-                self::selector::show_selector_popup(hwnd);
+            // Hit detection for primary monitor dropdown button
+            if has_monitor && x >= (220.0 * scale) as i32 && x <= (320.0 * scale) as i32 && y >= (12.0 * scale) as i32 && y <= (44.0 * scale) as i32 {
+                let monitors = {
+                    let state_opt = MENU_STATE.lock().unwrap();
+                    state_opt.as_ref().map(|s| s.active_monitors.clone()).unwrap_or(Vec::new())
+                };
+                self::selector::show_selector_popup(hwnd, self::selector::SelectorType::PrimaryMonitor { monitors }, scale);
                 return LRESULT(0);
             }
 
-            if has_monitor && y >= 86 && y <= 114 && x >= 30 && x <= 310 {
+            // Hit detection for refresh rate dropdown button
+            if has_monitor && x >= (220.0 * scale) as i32 && x <= (320.0 * scale) as i32 && y >= (80.0 * scale) as i32 && y <= (112.0 * scale) as i32 {
+                let (rates, current_rate) = {
+                    let state_opt = MENU_STATE.lock().unwrap();
+                    state_opt.as_ref().map(|s| (s.refresh_rates.clone(), s.current_refresh_rate)).unwrap_or((Vec::new(), 60))
+                };
+                self::selector::show_selector_popup(hwnd, self::selector::SelectorType::RefreshRate { rates, current_rate }, scale);
+                return LRESULT(0);
+            }
+
+            if has_monitor && y >= (120.0 * scale) as i32 && y <= (148.0 * scale) as i32 && x >= (36.0 * scale) as i32 && x <= (332.0 * scale) as i32 {
                 let mut state_opt = MENU_STATE.lock().unwrap();
                 if let Some(state) = state_opt.as_mut() {
                     state.is_dragging_slider = true;
-                    let val = ((x - 50) as f32 / 248.0 * 100.0) as i32;
+                    let val = (((x as f32 / scale) - 48.0) / 272.0 * 100.0) as i32;
                     let brightness = val.clamp(0, 100) as u32;
                     state.slider_value = brightness;
 
@@ -279,15 +439,15 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
         WM_MOUSEMOVE => {
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
 
-            let is_dragging = {
+            let (is_dragging, scale) = {
                 let state_opt = MENU_STATE.lock().unwrap();
-                state_opt.as_ref().map(|s| s.is_dragging_slider).unwrap_or(false)
+                state_opt.as_ref().map(|s| (s.is_dragging_slider, s.scale)).unwrap_or((false, 1.0))
             };
 
             if is_dragging {
                 let mut state_opt = MENU_STATE.lock().unwrap();
                 if let Some(state) = state_opt.as_mut() {
-                    let val = ((x - 50) as f32 / 248.0 * 100.0) as i32;
+                    let val = (((x as f32 / scale) - 48.0) / 272.0 * 100.0) as i32;
                     let brightness = val.clamp(0, 100) as u32;
                     state.slider_value = brightness;
 
@@ -503,40 +663,66 @@ pub fn show_menu(_owner_hwnd: HWND) {
     let has_monitor = !monitors.is_empty();
 
     unsafe {
-        let width = 320;
-        let height = if has_monitor { 128 } else { 48 };
-
         let mut cursor = POINT::default();
         let _ = GetCursorPos(&mut cursor);
 
-        let screen_height = GetSystemMetrics(SM_CYSCREEN);
+        let class_name = encode_wide("BrightnessMenuClass");
+        let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap();
+        let hinstance = windows::Win32::Foundation::HINSTANCE(instance.0);
 
-        let mut work_area = RECT::default();
-        let _ = SystemParametersInfoW(
-            SPI_GETWORKAREA,
-            0,
-            Some(&mut work_area as *mut _ as *mut std::ffi::c_void),
-            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        // Create window initially hidden and small at cursor position so Windows places it on the correct monitor
+        let hwnd = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(WS_EX_LAYERED),
+            PCWSTR(class_name.as_ptr()),
+            PCWSTR(encode_wide("BrightnessMenu").as_ptr()),
+            WS_POPUP,
+            cursor.x,
+            cursor.y,
+            10,
+            10,
+            HWND::default(),
+            None,
+            hinstance,
+            None,
+        ).unwrap();
+
+        let dpi = GetDpiForWindow(hwnd);
+        let scale = if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 } * 0.88;
+
+        let scaled_width = (340.0 * scale) as i32;
+        let scaled_height = if has_monitor { (156.0 * scale) as i32 } else { (56.0 * scale) as i32 };
+
+        let hmonitor = windows::Win32::Graphics::Gdi::MonitorFromWindow(
+            hwnd,
+            windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTONEAREST,
         );
+        let mut monitor_info = windows::Win32::Graphics::Gdi::MONITORINFOEXW::default();
+        monitor_info.monitorInfo.cbSize = std::mem::size_of::<windows::Win32::Graphics::Gdi::MONITORINFOEXW>() as u32;
+        let _ = windows::Win32::Graphics::Gdi::GetMonitorInfoW(
+            hmonitor,
+            &mut monitor_info as *mut _ as *mut _,
+        );
+        let work_area = monitor_info.monitorInfo.rcWork;
+        let monitor_rect = monitor_info.monitorInfo.rcMonitor;
 
-        let mut x = cursor.x - width / 2;
-        if x + width > work_area.right {
-            x = work_area.right - width - 12;
+        let mut x = cursor.x - scaled_width / 2;
+        if x + scaled_width > work_area.right {
+            x = work_area.right - scaled_width - 12;
         }
         if x < work_area.left + 12 {
             x = work_area.left + 12;
         }
 
-        let is_bottom_taskbar = work_area.bottom < screen_height;
+        let is_bottom_taskbar = work_area.bottom < monitor_rect.bottom;
 
         let y = if is_bottom_taskbar {
-            work_area.bottom - height - 12
-        } else if work_area.top > 0 {
+            work_area.bottom - scaled_height - 12
+        } else if work_area.top > monitor_rect.top {
             work_area.top + 12
         } else {
-            let mut val = cursor.y - height / 2;
-            if val + height > work_area.bottom {
-                val = work_area.bottom - height - 12;
+            let mut val = cursor.y - scaled_height / 2;
+            if val + scaled_height > work_area.bottom {
+                val = work_area.bottom - scaled_height - 12;
             }
             if val < work_area.top + 12 {
                 val = work_area.top + 12;
@@ -544,24 +730,15 @@ pub fn show_menu(_owner_hwnd: HWND) {
             val
         };
 
-        let class_name = encode_wide("BrightnessMenuClass");
-        let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap();
-        let hinstance = windows::Win32::Foundation::HINSTANCE(instance.0);
-
-        let hwnd = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(WS_EX_LAYERED),
-            PCWSTR(class_name.as_ptr()),
-            PCWSTR(encode_wide("BrightnessMenu").as_ptr()),
-            WS_POPUP,
+        let _ = SetWindowPos(
+            hwnd,
+            HWND::default(),
             x,
             y,
-            width,
-            height,
-            HWND::default(),
-            None,
-            hinstance,
-            None,
-        ).unwrap();
+            scaled_width,
+            scaled_height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
 
         let slider_value = if has_monitor { monitors[0].current_brightness } else { 50 };
 
@@ -573,6 +750,8 @@ pub fn show_menu(_owner_hwnd: HWND) {
         if refresh_rates.is_empty() {
             refresh_rates = vec![current_refresh_rate];
         }
+
+        let active_monitors = crate::monitor::get_active_monitors();
 
         {
             let mut state = MENU_STATE.lock().unwrap();
@@ -586,6 +765,8 @@ pub fn show_menu(_owner_hwnd: HWND) {
                 refresh_rates,
                 current_refresh_rate,
                 dropdown_hwnd: None,
+                active_monitors,
+                scale,
             });
         }
 

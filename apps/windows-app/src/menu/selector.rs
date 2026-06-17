@@ -1,6 +1,5 @@
 use crate::theme::is_light_theme;
 use crate::utils::encode_wide;
-use crate::monitor::set_refresh_rate;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM, RECT, BOOL, COLORREF};
 use windows::Win32::Graphics::Gdi::{
@@ -21,19 +20,25 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PostMessageW, WM_CLOSE, DefWindowProcW,
 };
 
+#[derive(Clone, Debug)]
+pub(crate) enum SelectorType {
+    RefreshRate { rates: Vec<u32>, current_rate: u32 },
+    PrimaryMonitor { monitors: Vec<crate::monitor::ActiveMonitor> },
+}
+
 pub(crate) struct SelectorState {
     pub(crate) hwnd: HWND,
     pub(crate) parent_hwnd: HWND,
-    pub(crate) rates: Vec<u32>,
-    pub(crate) current_rate: u32,
+    pub(crate) selector_type: SelectorType,
     pub(crate) hovered_index: Option<usize>,
     pub(crate) is_selecting: bool,
+    pub(crate) scale: f32,
 }
 
 unsafe impl Send for SelectorState {}
 unsafe impl Sync for SelectorState {}
 
-pub(crate) fn show_selector_popup(parent_hwnd: HWND) {
+pub(crate) fn show_selector_popup(parent_hwnd: HWND, selector_type: SelectorType, scale: f32) {
     // Check if dropdown was recently closed to prevent reopen toggle issues
     let recently_closed = {
         let last_destroy = super::DROPDOWN_LAST_DESTROY_TIME.lock().unwrap();
@@ -60,15 +65,11 @@ pub(crate) fn show_selector_popup(parent_hwnd: HWND) {
         return;
     }
 
-    let (rates, current_rate) = {
-        let state_opt = super::MENU_STATE.lock().unwrap();
-        if let Some(s) = state_opt.as_ref() {
-            (s.refresh_rates.clone(), s.current_refresh_rate)
-        } else {
-            (Vec::new(), 60)
-        }
+    let items_count = match &selector_type {
+        SelectorType::RefreshRate { rates, .. } => rates.len(),
+        SelectorType::PrimaryMonitor { monitors } => monitors.len(),
     };
-    if rates.is_empty() {
+    if items_count == 0 {
         return;
     }
 
@@ -94,15 +95,29 @@ pub(crate) fn show_selector_popup(parent_hwnd: HWND) {
     });
 
     unsafe {
-        // The dropdown button is from X=204 to 304, Y=44 to 74 relative to parent client area.
-        let rect = RECT { left: 204, top: 44, right: 304, bottom: 74 };
+        let is_hz = matches!(selector_type, SelectorType::RefreshRate { .. });
+        let rect = if is_hz {
+            RECT {
+                left: (220.0 * scale) as i32,
+                top: (80.0 * scale) as i32,
+                right: (320.0 * scale) as i32,
+                bottom: (112.0 * scale) as i32,
+            }
+        } else {
+            RECT {
+                left: (220.0 * scale) as i32,
+                top: (12.0 * scale) as i32,
+                right: (320.0 * scale) as i32,
+                bottom: (44.0 * scale) as i32,
+            }
+        };
         let mut pt = POINT { x: rect.left, y: rect.top };
         let _ = ClientToScreen(parent_hwnd, &mut pt);
 
-        let width = 100;
-        let height = (rates.len() * 28) as i32;
-        let x_coord = pt.x;
-        let y_coord = pt.y - height - 4;
+        let width = if is_hz { (100.0 * scale) as i32 } else { (200.0 * scale) as i32 };
+        let height = (items_count as f32 * 32.0 * scale) as i32;
+        let x_coord = if is_hz { pt.x } else { pt.x - (100.0 * scale) as i32 };
+        let y_coord = pt.y - height - (4.0 * scale) as i32;
 
         let class_name = encode_wide("SelectorWindowClass");
         let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap();
@@ -135,10 +150,10 @@ pub(crate) fn show_selector_popup(parent_hwnd: HWND) {
             *state = Some(SelectorState {
                 hwnd,
                 parent_hwnd,
-                rates,
-                current_rate,
+                selector_type,
                 hovered_index: None,
                 is_selecting: false,
+                scale,
             });
         }
 
@@ -172,11 +187,11 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
             let hdc = BeginPaint(hwnd, &mut ps);
 
             let is_light = is_light_theme();
-            let (rates, current_rate, hovered_index) = {
+            let (selector_type, hovered_index, scale) = {
                 let state_opt = super::DROPDOWN_STATE.lock().unwrap();
                 state_opt.as_ref().map(|s| {
-                    (s.rates.clone(), s.current_rate, s.hovered_index)
-                }).unwrap_or((Vec::new(), 60, None))
+                    (s.selector_type.clone(), s.hovered_index, s.scale)
+                }).unwrap_or((SelectorType::RefreshRate { rates: Vec::new(), current_rate: 60 }, None, 1.0))
             };
 
             let mut rect = RECT::default();
@@ -203,18 +218,24 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
 
             let _ = SetBkMode(mem_hdc, TRANSPARENT);
             let font = CreateFontW(
-                16, 0, 0, 0, 400, 0, 0, 0,
-                0, 0, 0, 4,
+                (15.0 * scale) as i32, 0, 0, 0, 400, 0, 0, 0,
+                0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
                 0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
             );
             let old_font = SelectObject(mem_hdc, font);
 
-            for (i, rate) in rates.iter().enumerate() {
+            let items_count = match &selector_type {
+                SelectorType::RefreshRate { rates, .. } => rates.len(),
+                SelectorType::PrimaryMonitor { monitors } => monitors.len(),
+            };
+
+            for i in 0..items_count {
+                let item_height = (32.0 * scale) as i32;
                 let item_rect = RECT {
                     left: 1,
-                    top: (i as i32 * 28) + 1,
+                    top: (i as i32 * item_height) + 1,
                     right: width - 1,
-                    bottom: ((i as i32 + 1) * 28) - 1,
+                    bottom: ((i as i32 + 1) * item_height) - 1,
                 };
 
                 // Draw hover background if needed
@@ -224,8 +245,18 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
                     let _ = DeleteObject(hover_brush);
                 }
 
+                // Determine text and selection indicator
+                let (text_str, is_selected) = match &selector_type {
+                    SelectorType::RefreshRate { rates, current_rate } => {
+                        (format!("{} Hz", rates[i]), rates[i] == *current_rate)
+                    }
+                    SelectorType::PrimaryMonitor { monitors } => {
+                        (monitors[i].friendly_name.clone(), monitors[i].is_primary)
+                    }
+                };
+
                 // Draw selection indicator
-                if *rate == current_rate {
+                if is_selected {
                     let dot_brush = CreateSolidBrush(COLORREF(0x00FFFFFF));
                     let dot_pen = CreatePen(
                         windows::Win32::Graphics::Gdi::PS_SOLID,
@@ -235,9 +266,9 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
                     let old_brush = SelectObject(mem_hdc, dot_brush);
                     let old_pen = SelectObject(mem_hdc, dot_pen);
 
-                    let cy = (i as i32 * 28) + 14;
-                    let cx = width - 18;
-                    let r = 3;
+                    let cy = (i as i32 * item_height) + item_height / 2;
+                    let cx = width - (16.0 * scale) as i32;
+                    let r = (3.5 * scale) as i32;
                     let _ = Ellipse(mem_hdc, cx - r, cy - r, cx + r + 1, cy + r + 1);
 
                     let _ = SelectObject(mem_hdc, old_brush);
@@ -246,12 +277,12 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
                     let _ = DeleteObject(dot_pen);
                 }
 
-                let mut text = encode_wide(&format!("{} Hz", rate));
+                let mut text = encode_wide(&text_str);
                 let mut text_rect = RECT {
-                    left: 16,
-                    top: i as i32 * 28,
-                    right: width - 28,
-                    bottom: (i as i32 + 1) * 28,
+                    left: (12.0 * scale) as i32,
+                    top: i as i32 * item_height,
+                    right: width - (24.0 * scale) as i32,
+                    bottom: (i as i32 + 1) * item_height,
                 };
                 let _ = SetTextColor(mem_hdc, text_color);
                 let _ = DrawTextW(mem_hdc, &mut text, &mut text_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
@@ -271,10 +302,20 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
         }
         WM_MOUSEMOVE => {
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-            let idx = (y / 28) as usize;
+            let scale = {
+                let state_opt = super::DROPDOWN_STATE.lock().unwrap();
+                state_opt.as_ref().map(|s| s.scale).unwrap_or(1.0)
+            };
+            let item_height = (32.0 * scale) as i32;
+            let idx = if item_height > 0 { (y / item_height) as usize } else { 0 };
             let len = {
                 let state_opt = super::DROPDOWN_STATE.lock().unwrap();
-                state_opt.as_ref().map(|s| s.rates.len()).unwrap_or(0)
+                state_opt.as_ref().map(|s| {
+                    match &s.selector_type {
+                        SelectorType::RefreshRate { rates, .. } => rates.len(),
+                        SelectorType::PrimaryMonitor { monitors } => monitors.len(),
+                    }
+                }).unwrap_or(0)
             };
             if idx < len {
                 let mut state_opt = super::DROPDOWN_STATE.lock().unwrap();
@@ -301,41 +342,71 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
         }
         WM_LBUTTONUP => {
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-            let idx = (y / 28) as usize;
-            let (selected_rate, parent_hwnd) = {
+            let scale = {
+                let state_opt = super::DROPDOWN_STATE.lock().unwrap();
+                state_opt.as_ref().map(|s| s.scale).unwrap_or(1.0)
+            };
+            let item_height = (32.0 * scale) as i32;
+            let idx = if item_height > 0 { (y / item_height) as usize } else { 0 };
+            
+            let (selector_type, parent_hwnd) = {
                 let state_opt = super::DROPDOWN_STATE.lock().unwrap();
                 if let Some(state) = state_opt.as_ref() {
-                    if idx < state.rates.len() {
-                        (Some(state.rates[idx]), Some(state.parent_hwnd))
-                    } else {
-                        (None, None)
-                    }
+                    (Some(state.selector_type.clone()), Some(state.parent_hwnd))
                 } else {
                     (None, None)
                 }
             };
-            if let (Some(rate), Some(parent)) = (selected_rate, parent_hwnd) {
-                {
+
+            if let (Some(sel_type), Some(parent)) = (selector_type, parent_hwnd) {
+                let should_hide_menu = matches!(sel_type, SelectorType::PrimaryMonitor { .. });
+                if !should_hide_menu {
                     let mut state_opt = super::DROPDOWN_STATE.lock().unwrap();
                     if let Some(state) = state_opt.as_mut() {
                         state.is_selecting = true;
                     }
                 }
-                let gdi_device = {
-                    let state_opt = super::MENU_STATE.lock().unwrap();
-                    state_opt.as_ref().and_then(|s| s.monitors.first().map(|m| m.gdi_device_name.clone()))
-                };
-                if let Some(gdi_device) = gdi_device {
-                    set_refresh_rate(&gdi_device, rate);
-                    let mut menu_state = super::MENU_STATE.lock().unwrap();
-                    if let Some(ms) = menu_state.as_mut() {
-                        ms.current_refresh_rate = rate;
+
+                match sel_type {
+                    SelectorType::RefreshRate { rates, .. } => {
+                        if idx < rates.len() {
+                            let rate = rates[idx];
+                            let gdi_device = {
+                                let state_opt = super::MENU_STATE.lock().unwrap();
+                                state_opt.as_ref().and_then(|s| s.monitors.first().map(|m| m.gdi_device_name.clone()))
+                            };
+                            if let Some(gdi_device) = gdi_device {
+                                crate::monitor::set_refresh_rate(&gdi_device, rate);
+                                let mut menu_state = super::MENU_STATE.lock().unwrap();
+                                if let Some(ms) = menu_state.as_mut() {
+                                    ms.current_refresh_rate = rate;
+                                }
+                            }
+                        }
+                        unsafe {
+                            let _ = InvalidateRect(parent, None, BOOL::from(false));
+                        }
+                    }
+                    SelectorType::PrimaryMonitor { monitors } => {
+                        if idx < monitors.len() {
+                            let target_gdi = monitors[idx].gdi_device_name.clone();
+                            std::thread::spawn(move || {
+                                crate::monitor::set_primary_monitor(&target_gdi);
+                            });
+
+                            let mut menu_state = super::MENU_STATE.lock().unwrap();
+                            if let Some(ms) = menu_state.as_mut() {
+                                if !ms.is_hiding {
+                                    ms.is_hiding = true;
+                                    let is_bottom_taskbar = ms.is_bottom_taskbar;
+                                    super::animate_hide_and_destroy(parent, is_bottom_taskbar);
+                                }
+                            }
+                        }
                     }
                 }
-                unsafe {
-                    let _ = InvalidateRect(parent, None, BOOL::from(false));
-                }
             }
+
             unsafe {
                 let _ = DestroyWindow(hwnd);
             }
@@ -375,14 +446,12 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
                     let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(parent_hwnd, &mut parent_rect);
                     
                     let in_parent = windows::Win32::Graphics::Gdi::PtInRect(&parent_rect, cursor).as_bool();
-                    if is_selecting || in_parent {
+                    if !ms.is_hiding && (is_selecting || in_parent) {
                         let _ = SetForegroundWindow(parent_hwnd);
-                    } else {
-                        if !ms.is_hiding {
-                            ms.is_hiding = true;
-                            let is_bottom_taskbar = ms.is_bottom_taskbar;
-                            super::animate_hide_and_destroy(parent_hwnd, is_bottom_taskbar);
-                        }
+                    } else if !ms.is_hiding {
+                        ms.is_hiding = true;
+                        let is_bottom_taskbar = ms.is_bottom_taskbar;
+                        super::animate_hide_and_destroy(parent_hwnd, is_bottom_taskbar);
                     }
                 }
             }
