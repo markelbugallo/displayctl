@@ -618,3 +618,39 @@ pub fn count_connected_external_monitors() -> usize {
         external_count
     }
 }
+
+pub fn count_available_displays() -> usize {
+    unsafe {
+        let mut num_paths = 0;
+        let mut num_modes = 0;
+        if GetDisplayConfigBufferSizes(QDC_ALL_PATHS, &mut num_paths, &mut num_modes).is_err() {
+            return 0;
+        }
+
+        let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); num_paths as usize];
+        let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); num_modes as usize];
+
+        if QueryDisplayConfig(
+            QDC_ALL_PATHS,
+            &mut num_paths,
+            paths.as_mut_ptr(),
+            &mut num_modes,
+            modes.as_mut_ptr(),
+            None,
+        ).is_err() {
+            return 0;
+        }
+
+        let mut unique_targets = Vec::new();
+        let limit = (num_paths as usize).min(paths.len());
+        for path in &paths[..limit] {
+            if path.targetInfo.targetAvailable.as_bool() {
+                let target_key = (path.targetInfo.adapterId.LowPart, path.targetInfo.adapterId.HighPart, path.targetInfo.id);
+                if !unique_targets.contains(&target_key) {
+                    unique_targets.push(target_key);
+                }
+            }
+        }
+        unique_targets.len()
+    }
+}

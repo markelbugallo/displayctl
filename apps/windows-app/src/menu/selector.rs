@@ -22,7 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 #[derive(Clone, Debug)]
 pub(crate) enum SelectorType {
-    RefreshRate { rates: Vec<u32>, current_rate: u32 },
+    RefreshRate { rates: Vec<u32>, current_rate: u32, top_coord: i32 },
     PrimaryMonitor { monitors: Vec<crate::monitor::ActiveMonitor> },
     Projection { current_topology: u32 },
 }
@@ -99,11 +99,11 @@ pub(crate) fn show_selector_popup(parent_hwnd: HWND, selector_type: SelectorType
     unsafe {
         let is_hz = matches!(selector_type, SelectorType::RefreshRate { .. });
         let rect = match &selector_type {
-            SelectorType::RefreshRate { .. } => RECT {
+            SelectorType::RefreshRate { top_coord, .. } => RECT {
                 left: (220.0 * scale) as i32,
-                top: (116.0 * scale) as i32,
+                top: (*top_coord as f32 * scale) as i32,
                 right: (320.0 * scale) as i32,
-                bottom: (148.0 * scale) as i32,
+                bottom: ((*top_coord + 32) as f32 * scale) as i32,
             },
             SelectorType::PrimaryMonitor { .. } => RECT {
                 left: (220.0 * scale) as i32,
@@ -198,7 +198,7 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
                 let state_opt = super::DROPDOWN_STATE.lock().unwrap();
                 state_opt.as_ref().map(|s| {
                     (s.selector_type.clone(), s.hovered_index, s.scale)
-                }).unwrap_or((SelectorType::RefreshRate { rates: Vec::new(), current_rate: 60 }, None, 1.0))
+                }).unwrap_or((SelectorType::RefreshRate { rates: Vec::new(), current_rate: 60, top_coord: 116 }, None, 1.0))
             };
 
             let mut rect = RECT::default();
@@ -225,7 +225,7 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
 
             let _ = SetBkMode(mem_hdc, TRANSPARENT);
             let font = CreateFontW(
-                -((12.0 * scale) as i32), 0, 0, 0, 600, 0, 0, 0,
+                -((13.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0,
                 0, 0, 0, 6, // CLEARTYPE_NATURAL_QUALITY
                 0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
             );
@@ -255,7 +255,7 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
 
                 // Determine text and selection indicator
                 let (text_str, is_selected) = match &selector_type {
-                    SelectorType::RefreshRate { rates, current_rate } => {
+                    SelectorType::RefreshRate { rates, current_rate, .. } => {
                         (format!("{} Hz", rates[i]), rates[i] == *current_rate)
                     }
                     SelectorType::PrimaryMonitor { monitors } => {

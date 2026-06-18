@@ -65,6 +65,7 @@ pub(crate) struct MenuState {
     pub(crate) active_monitors: Vec<crate::monitor::ActiveMonitor>,
     pub(crate) scale: f32,
     pub(crate) has_monitor: bool,
+    pub(crate) hide_selectors: bool,
 }
 
 unsafe impl Send for MenuState {}
@@ -83,7 +84,7 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             let hdc = BeginPaint(hwnd, &mut ps);
 
             let is_light = is_light_theme();
-            let (monitor_name, has_monitor, slider_value, current_refresh_rate, active_monitors, scale) = {
+            let (monitor_name, has_monitor, slider_value, current_refresh_rate, active_monitors, scale, hide_selectors) = {
                 let state_opt = MENU_STATE.lock().unwrap();
                 state_opt.as_ref().map(|s| {
                     (
@@ -93,17 +94,27 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                         s.current_refresh_rate,
                         s.active_monitors.clone(),
                         s.scale,
+                        s.hide_selectors,
                     )
-                }).unwrap_or((None, false, 50, 60, Vec::new(), 1.0))
+                }).unwrap_or((None, false, 50, 60, Vec::new(), 1.0, false))
             };
 
             let disabled_text_color = if is_light { COLORREF(0x00A0A0A0) } else { COLORREF(0x00606060) };
             let disabled_border_color = if is_light { COLORREF(0x00E0E0E0) } else { COLORREF(0x00404040) };
 
             let topology_id = crate::monitor::get_display_topology().unwrap_or(4);
-            let primary_is_integrated = active_monitors.iter()
-                .any(|m| m.is_primary && m.friendly_name == "Integrada");
-            let is_blocked = topology_id == 1 || (topology_id == 2 && primary_is_integrated);
+            let is_blocked = if hide_selectors {
+                false
+            } else {
+                let ext_count = crate::monitor::count_connected_external_monitors();
+                if ext_count == 0 {
+                    true
+                } else {
+                    let primary_is_integrated = active_monitors.iter()
+                        .any(|m| m.is_primary && m.friendly_name == "Integrada");
+                    topology_id == 1 || (topology_id == 2 && primary_is_integrated)
+                }
+            };
 
             let mut rect = RECT::default();
             let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rect);
@@ -129,7 +140,7 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             let _ = SetBkMode(mem_hdc, TRANSPARENT);
 
             let font_sub = CreateFontW(
-                -((11.0 * scale) as i32), 0, 0, 0, 600, 0, 0, 0,
+                -((12.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0,
                 0, 0, 0, 6,
                 0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
             );
@@ -151,29 +162,8 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             let _ = DeleteObject(font_sub);
 
             if has_monitor {
-                // --- Monitor Principal Row ---
-                let font_label = CreateFontW(
-                    -((13.0 * scale) as i32), 0, 0, 0, 600, 0, 0, 0,
-                    0, 0, 0, 6,
-                    0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
-                );
-                let old_font_label = SelectObject(mem_hdc, font_label);
-                let _ = SetTextColor(mem_hdc, text_color);
-
-                let mut label_text = encode_wide("Monitor principal");
-                let mut label_rect = RECT { 
-                    left: (20.0 * scale) as i32, 
-                    top: (12.0 * scale) as i32, 
-                    right: width - (130.0 * scale) as i32, 
-                    bottom: (44.0 * scale) as i32 
-                };
-                let _ = DrawTextW(mem_hdc, &mut label_text, &mut label_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
-                let _ = SelectObject(mem_hdc, old_font_label);
-                let _ = DeleteObject(font_label);
-
-                 let font_text = CreateFontW(
-                    -((12.0 * scale) as i32), 0, 0, 0, 600, 0, 0, 0,
+                let font_text = CreateFontW(
+                    -((13.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0,
                     0, 0, 0, 6,
                     0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
                 );
@@ -181,150 +171,175 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
 
                 let btn_bg_color = if is_light { COLORREF(0x00FFFFFF) } else { COLORREF(0x003D3D3D) };
                 let btn_border_color = if is_light { COLORREF(0x00D0D0D0) } else { COLORREF(0x00454545) };
-                
-                // Primary monitor button rect
-                let btn_rect1 = RECT { 
-                    left: (220.0 * scale) as i32, 
-                    top: (12.0 * scale) as i32, 
-                    right: (320.0 * scale) as i32, 
-                    bottom: (44.0 * scale) as i32 
-                };
-                let btn_brush1 = CreateSolidBrush(btn_bg_color);
-                let old_brush = SelectObject(mem_hdc, btn_brush1);
-                let btn_pen1 = CreatePen(windows::Win32::Graphics::Gdi::PS_SOLID, 1, btn_border_color);
-                let old_pen = SelectObject(mem_hdc, btn_pen1);
 
-                let _ = RoundRect(mem_hdc, btn_rect1.left, btn_rect1.top, btn_rect1.right, btn_rect1.bottom, 4, 4);
+                if !hide_selectors {
+                    // --- Monitor Principal Row ---
+                    let font_label = CreateFontW(
+                        -((14.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0,
+                        0, 0, 0, 6,
+                        0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
+                    );
+                    let old_font_label = SelectObject(mem_hdc, font_label);
+                    let _ = SetTextColor(mem_hdc, text_color);
 
-                let _ = SelectObject(mem_hdc, old_brush);
-                let _ = DeleteObject(btn_brush1);
-                let _ = SelectObject(mem_hdc, old_pen);
-                let _ = DeleteObject(btn_pen1);
+                    let mut label_text = encode_wide("Monitor principal");
+                    let mut label_rect = RECT { 
+                        left: (20.0 * scale) as i32, 
+                        top: (12.0 * scale) as i32, 
+                        right: width - (130.0 * scale) as i32, 
+                        bottom: (44.0 * scale) as i32 
+                    };
+                    let _ = DrawTextW(mem_hdc, &mut label_text, &mut label_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-                let primary_monitor_name = active_monitors.iter()
-                    .find(|m| m.is_primary)
-                    .map(|m| m.friendly_name.clone())
-                    .unwrap_or_else(|| "Principal".to_string());
-                let display_primary_name = if primary_monitor_name.chars().count() > 10 {
-                    primary_monitor_name.chars().take(8).collect::<String>() + "..."
-                } else {
-                    primary_monitor_name
-                };
+                    let _ = SelectObject(mem_hdc, old_font_label);
+                    let _ = DeleteObject(font_label);
 
-                let mut btn_text1 = encode_wide(&display_primary_name);
-                let mut btn_text_rect1 = RECT { 
-                    left: (228.0 * scale) as i32, 
-                    top: (12.0 * scale) as i32, 
-                    right: (302.0 * scale) as i32, 
-                    bottom: (44.0 * scale) as i32 
-                };
-                let _ = DrawTextW(mem_hdc, &mut btn_text1, &mut btn_text_rect1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                    // Primary monitor button rect
+                    let btn_rect1 = RECT { 
+                        left: (220.0 * scale) as i32, 
+                        top: (12.0 * scale) as i32, 
+                        right: (320.0 * scale) as i32, 
+                        bottom: (44.0 * scale) as i32 
+                    };
+                    let btn_brush1 = CreateSolidBrush(btn_bg_color);
+                    let old_brush = SelectObject(mem_hdc, btn_brush1);
+                    let btn_pen1 = CreatePen(windows::Win32::Graphics::Gdi::PS_SOLID, 1, btn_border_color);
+                    let old_pen = SelectObject(mem_hdc, btn_pen1);
 
-                 let font_icon_small = CreateFontW(
-                    -((8.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0,
-                    0, 0, 0, 6,
-                    0, PCWSTR(encode_wide("Segoe MDL2 Assets").as_ptr()),
-                );
-                let old_font_icon = SelectObject(mem_hdc, font_icon_small);
-                let mut arrow_text = encode_wide("\u{E70D}");
-                let mut arrow_rect1 = RECT { 
-                    left: (302.0 * scale) as i32, 
-                    top: (12.0 * scale) as i32, 
-                    right: (318.0 * scale) as i32, 
-                    bottom: (44.0 * scale) as i32 
-                };
-                let _ = DrawTextW(mem_hdc, &mut arrow_text, &mut arrow_rect1, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-                
-                let _ = SelectObject(mem_hdc, old_font_icon);
-                let _ = DeleteObject(font_icon_small);
+                    let _ = RoundRect(mem_hdc, btn_rect1.left, btn_rect1.top, btn_rect1.right, btn_rect1.bottom, 4, 4);
 
-                // --- Proyectar Row ---
-                let font_label = CreateFontW(
-                    -((13.0 * scale) as i32), 0, 0, 0, 600, 0, 0, 0,
-                    0, 0, 0, 6,
-                    0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
-                );
-                let old_font_label = SelectObject(mem_hdc, font_label);
-                let _ = SetTextColor(mem_hdc, text_color);
+                    let _ = SelectObject(mem_hdc, old_brush);
+                    let _ = DeleteObject(btn_brush1);
+                    let _ = SelectObject(mem_hdc, old_pen);
+                    let _ = DeleteObject(btn_pen1);
 
-                let mut label_text = encode_wide("Proyectar");
-                let mut label_rect = RECT { 
-                    left: (20.0 * scale) as i32, 
-                    top: (48.0 * scale) as i32, 
-                    right: width - (130.0 * scale) as i32, 
-                    bottom: (80.0 * scale) as i32 
-                };
-                let _ = DrawTextW(mem_hdc, &mut label_text, &mut label_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                    let primary_monitor_name = active_monitors.iter()
+                        .find(|m| m.is_primary)
+                        .map(|m| m.friendly_name.clone())
+                        .unwrap_or_else(|| "Principal".to_string());
+                    let display_primary_name = if primary_monitor_name.chars().count() > 10 {
+                        primary_monitor_name.chars().take(8).collect::<String>() + "..."
+                    } else {
+                        primary_monitor_name
+                    };
 
-                let _ = SelectObject(mem_hdc, old_font_label);
-                let _ = DeleteObject(font_label);
+                    let mut btn_text1 = encode_wide(&display_primary_name);
+                    let mut btn_text_rect1 = RECT { 
+                        left: (228.0 * scale) as i32, 
+                        top: (12.0 * scale) as i32, 
+                        right: (302.0 * scale) as i32, 
+                        bottom: (44.0 * scale) as i32 
+                    };
+                    let _ = DrawTextW(mem_hdc, &mut btn_text1, &mut btn_text_rect1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-                // Draw Proyectar button
-                let btn_rect_proj = RECT { 
-                    left: (220.0 * scale) as i32, 
-                    top: (48.0 * scale) as i32, 
-                    right: (320.0 * scale) as i32, 
-                    bottom: (80.0 * scale) as i32 
-                };
-                let btn_brush_proj = CreateSolidBrush(btn_bg_color);
-                let old_brush = SelectObject(mem_hdc, btn_brush_proj);
-                let btn_pen_proj = CreatePen(windows::Win32::Graphics::Gdi::PS_SOLID, 1, btn_border_color);
-                let old_pen = SelectObject(mem_hdc, btn_pen_proj);
+                    let font_icon_small = CreateFontW(
+                        -((8.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0,
+                        0, 0, 0, 6,
+                        0, PCWSTR(encode_wide("Segoe MDL2 Assets").as_ptr()),
+                    );
+                    let old_font_icon = SelectObject(mem_hdc, font_icon_small);
+                    let mut arrow_text = encode_wide("\u{E70D}");
+                    let mut arrow_rect1 = RECT { 
+                        left: (302.0 * scale) as i32, 
+                        top: (12.0 * scale) as i32, 
+                        right: (318.0 * scale) as i32, 
+                        bottom: (44.0 * scale) as i32 
+                    };
+                    let _ = DrawTextW(mem_hdc, &mut arrow_text, &mut arrow_rect1, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+                    
+                    let _ = SelectObject(mem_hdc, old_font_icon);
+                    let _ = DeleteObject(font_icon_small);
 
-                let _ = RoundRect(mem_hdc, btn_rect_proj.left, btn_rect_proj.top, btn_rect_proj.right, btn_rect_proj.bottom, 4, 4);
+                    // --- Proyectar Row ---
+                    let font_label = CreateFontW(
+                        -((14.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0,
+                        0, 0, 0, 6,
+                        0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
+                    );
+                    let old_font_label = SelectObject(mem_hdc, font_label);
+                    let _ = SetTextColor(mem_hdc, text_color);
 
-                let _ = SelectObject(mem_hdc, old_brush);
-                let _ = DeleteObject(btn_brush_proj);
-                let _ = SelectObject(mem_hdc, old_pen);
-                let _ = DeleteObject(btn_pen_proj);
+                    let mut label_text = encode_wide("Proyectar");
+                    let mut label_rect = RECT { 
+                        left: (20.0 * scale) as i32, 
+                        top: (48.0 * scale) as i32, 
+                        right: width - (130.0 * scale) as i32, 
+                        bottom: (80.0 * scale) as i32 
+                    };
+                    let _ = DrawTextW(mem_hdc, &mut label_text, &mut label_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-                let display_topology_btn_name = match topology_id {
-                    2 => "Duplicar",
-                    4 => "Extender",
-                    1 => "Solo int.",
-                    8 => "Solo ext.",
-                    _ => "Extender",
-                };
+                    let _ = SelectObject(mem_hdc, old_font_label);
+                    let _ = DeleteObject(font_label);
 
-                let mut btn_text_proj = encode_wide(display_topology_btn_name);
-                let mut btn_text_rect_proj = RECT { 
-                    left: (228.0 * scale) as i32, 
-                    top: (48.0 * scale) as i32, 
-                    right: (302.0 * scale) as i32, 
-                    bottom: (80.0 * scale) as i32 
-                };
-                let _ = DrawTextW(mem_hdc, &mut btn_text_proj, &mut btn_text_rect_proj, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                    // Draw Proyectar button
+                    let btn_rect_proj = RECT { 
+                        left: (220.0 * scale) as i32, 
+                        top: (48.0 * scale) as i32, 
+                        right: (320.0 * scale) as i32, 
+                        bottom: (80.0 * scale) as i32 
+                    };
+                    let btn_brush_proj = CreateSolidBrush(btn_bg_color);
+                    let old_brush = SelectObject(mem_hdc, btn_brush_proj);
+                    let btn_pen_proj = CreatePen(windows::Win32::Graphics::Gdi::PS_SOLID, 1, btn_border_color);
+                    let old_pen = SelectObject(mem_hdc, btn_pen_proj);
 
-                let font_icon_small = CreateFontW(
-                    -((8.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0,
-                    0, 0, 0, 6,
-                    0, PCWSTR(encode_wide("Segoe MDL2 Assets").as_ptr()),
-                );
-                let old_font_icon = SelectObject(mem_hdc, font_icon_small);
-                let mut arrow_text = encode_wide("\u{E70D}");
-                let mut arrow_rect_proj = RECT { 
-                    left: (302.0 * scale) as i32, 
-                    top: (48.0 * scale) as i32, 
-                    right: (318.0 * scale) as i32, 
-                    bottom: (80.0 * scale) as i32 
-                };
-                let _ = DrawTextW(mem_hdc, &mut arrow_text, &mut arrow_rect_proj, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-                
-                let _ = SelectObject(mem_hdc, old_font_icon);
-                let _ = DeleteObject(font_icon_small);
+                    let _ = RoundRect(mem_hdc, btn_rect_proj.left, btn_rect_proj.top, btn_rect_proj.right, btn_rect_proj.bottom, 4, 4);
 
-                // --- Separator line (below projection row) ---
-                let sep_color = if is_light { COLORREF(0x00D0D0D0) } else { COLORREF(0x003B3B3B) };
-                let sep_pen = CreatePen(windows::Win32::Graphics::Gdi::PS_SOLID, 1, sep_color);
-                let old_sep_pen = SelectObject(mem_hdc, sep_pen);
-                let _ = windows::Win32::Graphics::Gdi::MoveToEx(mem_hdc, (20.0 * scale) as i32, (90.0 * scale) as i32, None);
-                let _ = windows::Win32::Graphics::Gdi::LineTo(mem_hdc, width - (20.0 * scale) as i32, (90.0 * scale) as i32);
-                let _ = SelectObject(mem_hdc, old_sep_pen);
-                let _ = DeleteObject(sep_pen);
+                    let _ = SelectObject(mem_hdc, old_brush);
+                    let _ = DeleteObject(btn_brush_proj);
+                    let _ = SelectObject(mem_hdc, old_pen);
+                    let _ = DeleteObject(btn_pen_proj);
+
+                    let display_topology_btn_name = match topology_id {
+                        2 => "Duplicar",
+                        4 => "Extender",
+                        1 => "Solo int.",
+                        8 => "Solo ext.",
+                        _ => "Extender",
+                    };
+
+                    let mut btn_text_proj = encode_wide(display_topology_btn_name);
+                    let mut btn_text_rect_proj = RECT { 
+                        left: (228.0 * scale) as i32, 
+                        top: (48.0 * scale) as i32, 
+                        right: (302.0 * scale) as i32, 
+                        bottom: (80.0 * scale) as i32 
+                    };
+                    let _ = DrawTextW(mem_hdc, &mut btn_text_proj, &mut btn_text_rect_proj, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+                    let font_icon_small = CreateFontW(
+                        -((8.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0,
+                        0, 0, 0, 6,
+                        0, PCWSTR(encode_wide("Segoe MDL2 Assets").as_ptr()),
+                    );
+                    let old_font_icon = SelectObject(mem_hdc, font_icon_small);
+                    let mut arrow_text = encode_wide("\u{E70D}");
+                    let mut arrow_rect_proj = RECT { 
+                        left: (302.0 * scale) as i32, 
+                        top: (48.0 * scale) as i32, 
+                        right: (318.0 * scale) as i32, 
+                        bottom: (80.0 * scale) as i32 
+                    };
+                    let _ = DrawTextW(mem_hdc, &mut arrow_text, &mut arrow_rect_proj, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+                    
+                    let _ = SelectObject(mem_hdc, old_font_icon);
+                    let _ = DeleteObject(font_icon_small);
+
+                    // --- Separator line (below projection row) ---
+                    let sep_color = if is_light { COLORREF(0x00D0D0D0) } else { COLORREF(0x003B3B3B) };
+                    let sep_pen = CreatePen(windows::Win32::Graphics::Gdi::PS_SOLID, 1, sep_color);
+                    let old_sep_pen = SelectObject(mem_hdc, sep_pen);
+                    let _ = windows::Win32::Graphics::Gdi::MoveToEx(mem_hdc, (20.0 * scale) as i32, (90.0 * scale) as i32, None);
+                    let _ = windows::Win32::Graphics::Gdi::LineTo(mem_hdc, width - (20.0 * scale) as i32, (90.0 * scale) as i32);
+                    let _ = SelectObject(mem_hdc, old_sep_pen);
+                    let _ = DeleteObject(sep_pen);
+                }
+
+                let y_offset = if hide_selectors { -72.0 * scale } else { 0.0 };
 
                 // --- Monitor label (below separator) ---
                 let font_monitor_label = CreateFontW(
-                    -((12.0 * scale) as i32), 0, 0, 0, 700, 0, 0, 0, 
+                    -((13.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0, 
                     0, 0, 0, 6,
                     0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
                 );
@@ -340,9 +355,9 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                 let mut monitor_label_text = encode_wide(&monitor_label_display);
                 let mut monitor_label_rect = RECT { 
                     left: (20.0 * scale) as i32, 
-                    top: (94.0 * scale) as i32, 
+                    top: ((94.0 * scale) + y_offset) as i32, 
                     right: width - (20.0 * scale) as i32, 
-                    bottom: (110.0 * scale) as i32 
+                    bottom: ((110.0 * scale) + y_offset) as i32 
                 };
                 let _ = DrawTextW(mem_hdc, &mut monitor_label_text, &mut monitor_label_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
                 let _ = SelectObject(mem_hdc, old_font_monitor);
@@ -350,7 +365,7 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
 
                 // --- Refresh Rate Row ---
                 let font_label = CreateFontW(
-                    -((13.0 * scale) as i32), 0, 0, 0, 600, 0, 0, 0,
+                    -((14.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0,
                     0, 0, 0, 6,
                     0, PCWSTR(encode_wide("Segoe UI Variable Text").as_ptr()),
                 );
@@ -360,9 +375,9 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                 let mut label_text = encode_wide("Tasa de refresco");
                 let mut label_rect = RECT { 
                     left: (20.0 * scale) as i32, 
-                    top: (116.0 * scale) as i32, 
+                    top: ((116.0 * scale) + y_offset) as i32, 
                     right: width - (130.0 * scale) as i32, 
-                    bottom: (148.0 * scale) as i32 
+                    bottom: ((148.0 * scale) + y_offset) as i32 
                 };
                 let _ = DrawTextW(mem_hdc, &mut label_text, &mut label_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
@@ -372,9 +387,9 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                 // Draw refresh rate button
                 let btn_rect2 = RECT { 
                     left: (220.0 * scale) as i32, 
-                    top: (116.0 * scale) as i32, 
+                    top: ((116.0 * scale) + y_offset) as i32, 
                     right: (320.0 * scale) as i32, 
-                    bottom: (148.0 * scale) as i32 
+                    bottom: ((148.0 * scale) + y_offset) as i32 
                 };
                 let btn_brush2 = CreateSolidBrush(btn_bg_color);
                 let old_brush = SelectObject(mem_hdc, btn_brush2);
@@ -391,9 +406,9 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                 let mut btn_text2 = encode_wide(&format!("{} Hz", current_refresh_rate));
                 let mut btn_text_rect2 = RECT { 
                     left: (228.0 * scale) as i32, 
-                    top: (116.0 * scale) as i32, 
+                    top: ((116.0 * scale) + y_offset) as i32, 
                     right: (302.0 * scale) as i32, 
-                    bottom: (148.0 * scale) as i32 
+                    bottom: ((148.0 * scale) + y_offset) as i32 
                 };
                 let _ = SetTextColor(mem_hdc, if is_blocked { disabled_text_color } else { text_color });
                 let _ = DrawTextW(mem_hdc, &mut btn_text2, &mut btn_text_rect2, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
@@ -407,9 +422,9 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                 let mut arrow_text = encode_wide("\u{E70D}");
                 let mut arrow_rect2 = RECT { 
                     left: (302.0 * scale) as i32, 
-                    top: (116.0 * scale) as i32, 
+                    top: ((116.0 * scale) + y_offset) as i32, 
                     right: (318.0 * scale) as i32, 
-                    bottom: (148.0 * scale) as i32 
+                    bottom: ((148.0 * scale) + y_offset) as i32 
                 };
                 let _ = DrawTextW(mem_hdc, &mut arrow_text, &mut arrow_rect2, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
                 
@@ -432,9 +447,9 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                 let mut icon_text = encode_wide("\u{E706}");
                 let mut icon_rect = RECT { 
                     left: (20.0 * scale) as i32, 
-                    top: (158.0 * scale) as i32, 
+                    top: ((158.0 * scale) + y_offset) as i32, 
                     right: (42.0 * scale) as i32, 
-                    bottom: (182.0 * scale) as i32 
+                    bottom: ((182.0 * scale) + y_offset) as i32 
                 };
                 let _ = DrawTextW(mem_hdc, &mut icon_text, &mut icon_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
                 let _ = SelectObject(mem_hdc, old_font_slider);
@@ -451,13 +466,13 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
 
                 let inactive_brush = CreateSolidBrush(track_bg);
                 let old_brush = SelectObject(mem_hdc, inactive_brush);
-                let _ = RoundRect(mem_hdc, (48.0 * scale) as i32, (168.0 * scale) as i32, (320.0 * scale) as i32, (172.0 * scale) as i32, 4, 4);
+                let _ = RoundRect(mem_hdc, (48.0 * scale) as i32, ((168.0 * scale) + y_offset) as i32, (320.0 * scale) as i32, ((172.0 * scale) + y_offset) as i32, 4, 4);
                 let _ = SelectObject(mem_hdc, old_brush);
                 let _ = DeleteObject(inactive_brush);
 
                 let active_brush = CreateSolidBrush(cur_accent);
                 let old_brush = SelectObject(mem_hdc, active_brush);
-                let _ = RoundRect(mem_hdc, (48.0 * scale) as i32, (168.0 * scale) as i32, x_thumb, (172.0 * scale) as i32, 4, 4);
+                let _ = RoundRect(mem_hdc, (48.0 * scale) as i32, ((168.0 * scale) + y_offset) as i32, x_thumb, ((172.0 * scale) + y_offset) as i32, 4, 4);
                 let _ = SelectObject(mem_hdc, old_brush);
                 let _ = DeleteObject(active_brush);
 
@@ -467,7 +482,7 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                 self::paint::draw_antialiased_thumb(
                     mem_hdc,
                     x_thumb,
-                    (170.0 * scale) as i32,
+                    ((170.0 * scale) + y_offset) as i32,
                     is_light,
                     cur_accent,
                     (48.0 * scale) as i32,
@@ -490,18 +505,29 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
 
-            let (has_monitor, scale, is_blocked) = {
+            let (has_monitor, scale, is_blocked, hide_selectors) = {
                 let state_opt = MENU_STATE.lock().unwrap();
                 state_opt.as_ref().map(|s| {
-                    let topology_id = crate::monitor::get_display_topology().unwrap_or(4);
-                    let primary_is_integrated = s.active_monitors.iter().any(|m| m.is_primary && m.friendly_name == "Integrada");
-                    let is_blocked = topology_id == 1 || (topology_id == 2 && primary_is_integrated);
-                    (s.has_monitor, s.scale, is_blocked)
-                }).unwrap_or((false, 1.0, false))
+                    let is_blocked = if s.hide_selectors {
+                        false
+                    } else {
+                        let ext_count = crate::monitor::count_connected_external_monitors();
+                        if ext_count == 0 {
+                            true
+                        } else {
+                            let topology_id = crate::monitor::get_display_topology().unwrap_or(4);
+                            let primary_is_integrated = s.active_monitors.iter().any(|m| m.is_primary && m.friendly_name == "Integrada");
+                            topology_id == 1 || (topology_id == 2 && primary_is_integrated)
+                        }
+                    };
+                    (s.has_monitor, s.scale, is_blocked, s.hide_selectors)
+                }).unwrap_or((false, 1.0, false, false))
             };
 
+            let y_offset = if hide_selectors { -72.0 * scale } else { 0.0 };
+
             // Hit detection for primary monitor dropdown button
-            if has_monitor && x >= (220.0 * scale) as i32 && x <= (320.0 * scale) as i32 && y >= (12.0 * scale) as i32 && y <= (44.0 * scale) as i32 {
+            if has_monitor && !hide_selectors && x >= (220.0 * scale) as i32 && x <= (320.0 * scale) as i32 && y >= (12.0 * scale) as i32 && y <= (44.0 * scale) as i32 {
                 let monitors = {
                     let state_opt = MENU_STATE.lock().unwrap();
                     state_opt.as_ref().map(|s| s.active_monitors.clone()).unwrap_or(Vec::new())
@@ -511,23 +537,24 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             }
 
             // Hit detection for projection dropdown button
-            if has_monitor && x >= (220.0 * scale) as i32 && x <= (320.0 * scale) as i32 && y >= (48.0 * scale) as i32 && y <= (80.0 * scale) as i32 {
+            if has_monitor && !hide_selectors && x >= (220.0 * scale) as i32 && x <= (320.0 * scale) as i32 && y >= (48.0 * scale) as i32 && y <= (80.0 * scale) as i32 {
                 let current_topology = crate::monitor::get_display_topology().unwrap_or(4);
                 self::selector::show_selector_popup(hwnd, self::selector::SelectorType::Projection { current_topology }, scale);
                 return LRESULT(0);
             }
 
             // Hit detection for refresh rate dropdown button
-            if has_monitor && !is_blocked && x >= (220.0 * scale) as i32 && x <= (320.0 * scale) as i32 && y >= (116.0 * scale) as i32 && y <= (148.0 * scale) as i32 {
+            if has_monitor && !is_blocked && x >= (220.0 * scale) as i32 && x <= (320.0 * scale) as i32 && y >= ((116.0 * scale) + y_offset) as i32 && y <= ((148.0 * scale) + y_offset) as i32 {
                 let (rates, current_rate) = {
                     let state_opt = MENU_STATE.lock().unwrap();
                     state_opt.as_ref().map(|s| (s.refresh_rates.clone(), s.current_refresh_rate)).unwrap_or((Vec::new(), 60))
                 };
-                self::selector::show_selector_popup(hwnd, self::selector::SelectorType::RefreshRate { rates, current_rate }, scale);
+                let top_coord = if hide_selectors { 44 } else { 116 };
+                self::selector::show_selector_popup(hwnd, self::selector::SelectorType::RefreshRate { rates, current_rate, top_coord }, scale);
                 return LRESULT(0);
             }
 
-            if has_monitor && !is_blocked && y >= (156.0 * scale) as i32 && y <= (184.0 * scale) as i32 && x >= (36.0 * scale) as i32 && x <= (332.0 * scale) as i32 {
+            if has_monitor && !is_blocked && y >= ((156.0 * scale) + y_offset) as i32 && y <= ((184.0 * scale) + y_offset) as i32 && x >= (36.0 * scale) as i32 && x <= (332.0 * scale) as i32 {
                 let mut state_opt = MENU_STATE.lock().unwrap();
                 if let Some(state) = state_opt.as_mut() {
                     state.is_dragging_slider = true;
@@ -799,10 +826,21 @@ pub fn show_menu(_owner_hwnd: HWND) {
         ).unwrap();
 
         let dpi = GetDpiForWindow(hwnd);
-        let scale = if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 } * 0.88;
+        let scale = if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 } * 1.0;
 
+        let ext_count = crate::monitor::count_connected_external_monitors();
+        let total_avail = crate::monitor::count_available_displays();
+        let hide_selectors = has_monitor && (total_avail <= 1) && (ext_count > 0);
         let scaled_width = (340.0 * scale) as i32;
-        let scaled_height = if has_monitor { (192.0 * scale) as i32 } else { (56.0 * scale) as i32 };
+        let scaled_height = if has_monitor {
+            if hide_selectors {
+                (120.0 * scale) as i32
+            } else {
+                (192.0 * scale) as i32
+            }
+        } else {
+            (56.0 * scale) as i32
+        };
 
         let hmonitor = windows::Win32::Graphics::Gdi::MonitorFromWindow(
             hwnd,
@@ -880,6 +918,7 @@ pub fn show_menu(_owner_hwnd: HWND) {
                 active_monitors,
                 scale,
                 has_monitor,
+                hide_selectors,
             });
         }
 
