@@ -24,6 +24,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 pub(crate) enum SelectorType {
     RefreshRate { rates: Vec<u32>, current_rate: u32 },
     PrimaryMonitor { monitors: Vec<crate::monitor::ActiveMonitor> },
+    Projection { current_topology: u32 },
 }
 
 pub(crate) struct SelectorState {
@@ -68,6 +69,7 @@ pub(crate) fn show_selector_popup(parent_hwnd: HWND, selector_type: SelectorType
     let items_count = match &selector_type {
         SelectorType::RefreshRate { rates, .. } => rates.len(),
         SelectorType::PrimaryMonitor { monitors } => monitors.len(),
+        SelectorType::Projection { .. } => 4,
     };
     if items_count == 0 {
         return;
@@ -96,20 +98,25 @@ pub(crate) fn show_selector_popup(parent_hwnd: HWND, selector_type: SelectorType
 
     unsafe {
         let is_hz = matches!(selector_type, SelectorType::RefreshRate { .. });
-        let rect = if is_hz {
-            RECT {
+        let rect = match &selector_type {
+            SelectorType::RefreshRate { .. } => RECT {
                 left: (220.0 * scale) as i32,
-                top: (80.0 * scale) as i32,
+                top: (116.0 * scale) as i32,
                 right: (320.0 * scale) as i32,
-                bottom: (112.0 * scale) as i32,
-            }
-        } else {
-            RECT {
+                bottom: (148.0 * scale) as i32,
+            },
+            SelectorType::PrimaryMonitor { .. } => RECT {
                 left: (220.0 * scale) as i32,
                 top: (12.0 * scale) as i32,
                 right: (320.0 * scale) as i32,
                 bottom: (44.0 * scale) as i32,
-            }
+            },
+            SelectorType::Projection { .. } => RECT {
+                left: (220.0 * scale) as i32,
+                top: (48.0 * scale) as i32,
+                right: (320.0 * scale) as i32,
+                bottom: (80.0 * scale) as i32,
+            },
         };
         let mut pt = POINT { x: rect.left, y: rect.top };
         let _ = ClientToScreen(parent_hwnd, &mut pt);
@@ -227,6 +234,7 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
             let items_count = match &selector_type {
                 SelectorType::RefreshRate { rates, .. } => rates.len(),
                 SelectorType::PrimaryMonitor { monitors } => monitors.len(),
+                SelectorType::Projection { .. } => 4,
             };
 
             for i in 0..items_count {
@@ -252,6 +260,23 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
                     }
                     SelectorType::PrimaryMonitor { monitors } => {
                         (monitors[i].friendly_name.clone(), monitors[i].is_primary)
+                    }
+                    SelectorType::Projection { current_topology } => {
+                        let text = match i {
+                            0 => "Extender",
+                            1 => "Duplicar",
+                            2 => "Solo integrada",
+                            3 => "Solo externa",
+                            _ => "",
+                        };
+                        let target_val = match i {
+                            0 => 4, // Extend
+                            1 => 2, // Clone
+                            2 => 1, // Internal
+                            3 => 8, // External
+                            _ => 0,
+                        };
+                        (text.to_string(), *current_topology == target_val)
                     }
                 };
 
@@ -314,6 +339,7 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
                     match &s.selector_type {
                         SelectorType::RefreshRate { rates, .. } => rates.len(),
                         SelectorType::PrimaryMonitor { monitors } => monitors.len(),
+                        SelectorType::Projection { .. } => 4,
                     }
                 }).unwrap_or(0)
             };
@@ -359,7 +385,7 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
             };
 
             if let (Some(sel_type), Some(parent)) = (selector_type, parent_hwnd) {
-                let should_hide_menu = matches!(sel_type, SelectorType::PrimaryMonitor { .. });
+                let should_hide_menu = matches!(sel_type, SelectorType::PrimaryMonitor { .. }) || matches!(sel_type, SelectorType::Projection { .. });
                 if !should_hide_menu {
                     let mut state_opt = super::DROPDOWN_STATE.lock().unwrap();
                     if let Some(state) = state_opt.as_mut() {
@@ -392,6 +418,29 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
                             let target_gdi = monitors[idx].gdi_device_name.clone();
                             std::thread::spawn(move || {
                                 crate::monitor::set_primary_monitor(&target_gdi);
+                            });
+
+                            let mut menu_state = super::MENU_STATE.lock().unwrap();
+                            if let Some(ms) = menu_state.as_mut() {
+                                if !ms.is_hiding {
+                                    ms.is_hiding = true;
+                                    let is_bottom_taskbar = ms.is_bottom_taskbar;
+                                    super::animate_hide_and_destroy(parent, is_bottom_taskbar);
+                                }
+                            }
+                        }
+                    }
+                    SelectorType::Projection { .. } => {
+                        if idx < 4 {
+                            let target_topology = match idx {
+                                0 => 4, // Extend
+                                1 => 2, // Clone
+                                2 => 1, // Internal
+                                3 => 8, // External
+                                _ => 4,
+                            };
+                            std::thread::spawn(move || {
+                                crate::monitor::set_display_topology(target_topology);
                             });
 
                             let mut menu_state = super::MENU_STATE.lock().unwrap();

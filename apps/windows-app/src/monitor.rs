@@ -9,6 +9,8 @@ use windows::Win32::Devices::Display::{
     DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED,
     DISPLAYCONFIG_OUTPUT_TECHNOLOGY_UDI_EMBEDDED,
     DISPLAYCONFIG_OUTPUT_TECHNOLOGY_LVDS,
+    SetDisplayConfig, QDC_DATABASE_CURRENT, SDC_APPLY,
+    DISPLAYCONFIG_TOPOLOGY_ID, QDC_ALL_PATHS,
 };
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, HDC, HMONITOR, GetMonitorInfoW, MONITORINFOEXW,
@@ -541,4 +543,78 @@ pub fn is_hmonitor_internal(hmon: HMONITOR) -> bool {
         }
     }
     false
+}
+
+pub fn get_display_topology() -> Option<u32> {
+    unsafe {
+        let mut num_paths = 0;
+        let mut num_modes = 0;
+        if GetDisplayConfigBufferSizes(QDC_DATABASE_CURRENT, &mut num_paths, &mut num_modes).is_err() {
+            return None;
+        }
+
+        let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); num_paths as usize];
+        let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); num_modes as usize];
+        let mut topology = DISPLAYCONFIG_TOPOLOGY_ID::default();
+
+        if QueryDisplayConfig(
+            QDC_DATABASE_CURRENT,
+            &mut num_paths,
+            paths.as_mut_ptr(),
+            &mut num_modes,
+            modes.as_mut_ptr(),
+            Some(&mut topology),
+        ).is_ok() {
+            Some(topology.0 as u32)
+        } else {
+            None
+        }
+    }
+}
+
+pub fn set_display_topology(topology: u32) -> bool {
+    unsafe {
+        let flags = windows::Win32::Devices::Display::SET_DISPLAY_CONFIG_FLAGS(SDC_APPLY.0 | topology);
+        SetDisplayConfig(None, None, flags) == 0
+    }
+}
+
+pub fn count_connected_external_monitors() -> usize {
+    unsafe {
+        let mut num_paths = 0;
+        let mut num_modes = 0;
+        if GetDisplayConfigBufferSizes(QDC_ALL_PATHS, &mut num_paths, &mut num_modes).is_err() {
+            return 0;
+        }
+
+        let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); num_paths as usize];
+        let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); num_modes as usize];
+
+        if QueryDisplayConfig(
+            QDC_ALL_PATHS,
+            &mut num_paths,
+            paths.as_mut_ptr(),
+            &mut num_modes,
+            modes.as_mut_ptr(),
+            None,
+        ).is_err() {
+            return 0;
+        }
+
+        let mut external_count = 0;
+        let limit = (num_paths as usize).min(paths.len());
+        for path in &paths[..limit] {
+            if path.targetInfo.targetAvailable.as_bool() {
+                let tech = path.targetInfo.outputTechnology;
+                if tech != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL
+                    && tech != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED
+                    && tech != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_UDI_EMBEDDED
+                    && tech != DISPLAYCONFIG_OUTPUT_TECHNOLOGY_LVDS
+                {
+                    external_count += 1;
+                }
+            }
+        }
+        external_count
+    }
 }

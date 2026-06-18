@@ -166,7 +166,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             LRESULT(0)
         }
         WM_DISPLAYCHANGE => {
-            let external_monitors = monitor::count_external_monitors();
+            let external_monitors = monitor::count_connected_external_monitors();
             let is_shown = TRAY_ICON_SHOWN.load(Ordering::SeqCst);
             if external_monitors > 0 && !is_shown {
                 if let Some(state) = APP_STATE.get() {
@@ -307,7 +307,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         MAIN_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
 
-        let external_monitors = monitor::count_external_monitors();
+        let external_monitors = monitor::count_connected_external_monitors();
         if external_monitors > 0 {
             update_tray_icon(hwnd, true, icon_black, icon_white);
             TRAY_ICON_SHOWN.store(true, Ordering::SeqCst);
