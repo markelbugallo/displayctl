@@ -579,7 +579,50 @@ pub fn set_display_topology(topology: u32) -> bool {
     }
 }
 
+pub fn has_internal_display() -> bool {
+    unsafe {
+        let mut num_paths = 0;
+        let mut num_modes = 0;
+        if GetDisplayConfigBufferSizes(QDC_ALL_PATHS, &mut num_paths, &mut num_modes).is_err() {
+            return false;
+        }
+
+        let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); num_paths as usize];
+        let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); num_modes as usize];
+
+        if QueryDisplayConfig(
+            QDC_ALL_PATHS,
+            &mut num_paths,
+            paths.as_mut_ptr(),
+            &mut num_modes,
+            modes.as_mut_ptr(),
+            None,
+        ).is_err() {
+            return false;
+        }
+
+        let limit = (num_paths as usize).min(paths.len());
+        for path in &paths[..limit] {
+            if path.targetInfo.targetAvailable.as_bool() {
+                let tech = path.targetInfo.outputTechnology;
+                if tech == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL
+                    || tech == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED
+                    || tech == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_UDI_EMBEDDED
+                    || tech == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_LVDS
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
 pub fn count_connected_external_monitors() -> usize {
+    if has_internal_display() && count_available_displays() <= 1 {
+        return 0;
+    }
+
     unsafe {
         let mut num_paths = 0;
         let mut num_modes = 0;
