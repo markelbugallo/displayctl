@@ -196,7 +196,7 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
 
                     // Primary monitor button rect
                     let btn_rect1 = RECT { 
-                        left: (220.0 * scale) as i32, 
+                        left: (200.0 * scale) as i32, 
                         top: (12.0 * scale) as i32, 
                         right: (320.0 * scale) as i32, 
                         bottom: (44.0 * scale) as i32 
@@ -225,7 +225,7 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
 
                     let mut btn_text1 = encode_wide(&display_primary_name);
                     let mut btn_text_rect1 = RECT { 
-                        left: (228.0 * scale) as i32, 
+                        left: (208.0 * scale) as i32, 
                         top: (12.0 * scale) as i32, 
                         right: (302.0 * scale) as i32, 
                         bottom: (44.0 * scale) as i32 
@@ -273,7 +273,7 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
 
                     // Draw Proyectar button
                     let btn_rect_proj = RECT { 
-                        left: (220.0 * scale) as i32, 
+                        left: (200.0 * scale) as i32, 
                         top: (48.0 * scale) as i32, 
                         right: (320.0 * scale) as i32, 
                         bottom: (80.0 * scale) as i32 
@@ -293,19 +293,19 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                     let display_topology_btn_name = match topology_id {
                         2 => "Duplicar",
                         4 => "Extender",
-                        1 => "Solo int.",
-                        8 => "Solo ext.",
+                        1 => "Solo integrada",
+                        8 => "Solo externa",
                         _ => "Extender",
                     };
 
                     let mut btn_text_proj = encode_wide(display_topology_btn_name);
                     let mut btn_text_rect_proj = RECT { 
-                        left: (228.0 * scale) as i32, 
+                        left: (208.0 * scale) as i32, 
                         top: (48.0 * scale) as i32, 
                         right: (302.0 * scale) as i32, 
                         bottom: (80.0 * scale) as i32 
                     };
-                    let _ = DrawTextW(mem_hdc, &mut btn_text_proj, &mut btn_text_rect_proj, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                    let _ = DrawTextW(mem_hdc, &mut btn_text_proj, &mut btn_text_rect_proj, DT_LEFT | DT_SINGLELINE | DT_VCENTER | windows::Win32::Graphics::Gdi::DT_END_ELLIPSIS);
 
                     let font_icon_small = CreateFontW(
                         -((8.0 * scale) as i32), 0, 0, 0, 400, 0, 0, 0,
@@ -386,7 +386,7 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
 
                 // Draw refresh rate button
                 let btn_rect2 = RECT { 
-                    left: (220.0 * scale) as i32, 
+                    left: (200.0 * scale) as i32, 
                     top: ((116.0 * scale) + y_offset) as i32, 
                     right: (320.0 * scale) as i32, 
                     bottom: ((148.0 * scale) + y_offset) as i32 
@@ -405,7 +405,7 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
 
                 let mut btn_text2 = encode_wide(&format!("{} Hz", current_refresh_rate));
                 let mut btn_text_rect2 = RECT { 
-                    left: (228.0 * scale) as i32, 
+                    left: (208.0 * scale) as i32, 
                     top: ((116.0 * scale) + y_offset) as i32, 
                     right: (302.0 * scale) as i32, 
                     bottom: ((148.0 * scale) + y_offset) as i32 
@@ -527,7 +527,7 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             let y_offset = if hide_selectors { -72.0 * scale } else { 0.0 };
 
             // Hit detection for primary monitor dropdown button
-            if has_monitor && !hide_selectors && x >= (220.0 * scale) as i32 && x <= (320.0 * scale) as i32 && y >= (12.0 * scale) as i32 && y <= (44.0 * scale) as i32 {
+            if has_monitor && !hide_selectors && x >= (200.0 * scale) as i32 && x <= (320.0 * scale) as i32 && y >= (12.0 * scale) as i32 && y <= (44.0 * scale) as i32 {
                 let monitors = {
                     let state_opt = MENU_STATE.lock().unwrap();
                     state_opt.as_ref().map(|s| s.active_monitors.clone()).unwrap_or(Vec::new())
@@ -537,14 +537,14 @@ unsafe extern "system" fn menu_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             }
 
             // Hit detection for projection dropdown button
-            if has_monitor && !hide_selectors && x >= (220.0 * scale) as i32 && x <= (320.0 * scale) as i32 && y >= (48.0 * scale) as i32 && y <= (80.0 * scale) as i32 {
+            if has_monitor && !hide_selectors && x >= (200.0 * scale) as i32 && x <= (320.0 * scale) as i32 && y >= (48.0 * scale) as i32 && y <= (80.0 * scale) as i32 {
                 let current_topology = crate::monitor::get_display_topology().unwrap_or(4);
                 self::selector::show_selector_popup(hwnd, self::selector::SelectorType::Projection { current_topology }, scale);
                 return LRESULT(0);
             }
 
             // Hit detection for refresh rate dropdown button
-            if has_monitor && !is_blocked && x >= (220.0 * scale) as i32 && x <= (320.0 * scale) as i32 && y >= ((116.0 * scale) + y_offset) as i32 && y <= ((148.0 * scale) + y_offset) as i32 {
+            if has_monitor && !is_blocked && x >= (200.0 * scale) as i32 && x <= (320.0 * scale) as i32 && y >= ((116.0 * scale) + y_offset) as i32 && y <= ((148.0 * scale) + y_offset) as i32 {
                 let (rates, current_rate) = {
                     let state_opt = MENU_STATE.lock().unwrap();
                     state_opt.as_ref().map(|s| (s.refresh_rates.clone(), s.current_refresh_rate)).unwrap_or((Vec::new(), 60))

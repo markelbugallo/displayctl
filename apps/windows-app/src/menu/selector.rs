@@ -97,22 +97,21 @@ pub(crate) fn show_selector_popup(parent_hwnd: HWND, selector_type: SelectorType
     });
 
     unsafe {
-        let is_hz = matches!(selector_type, SelectorType::RefreshRate { .. });
         let rect = match &selector_type {
             SelectorType::RefreshRate { top_coord, .. } => RECT {
-                left: (220.0 * scale) as i32,
+                left: (200.0 * scale) as i32,
                 top: (*top_coord as f32 * scale) as i32,
                 right: (320.0 * scale) as i32,
                 bottom: ((*top_coord + 32) as f32 * scale) as i32,
             },
             SelectorType::PrimaryMonitor { .. } => RECT {
-                left: (220.0 * scale) as i32,
+                left: (200.0 * scale) as i32,
                 top: (12.0 * scale) as i32,
                 right: (320.0 * scale) as i32,
                 bottom: (44.0 * scale) as i32,
             },
             SelectorType::Projection { .. } => RECT {
-                left: (220.0 * scale) as i32,
+                left: (200.0 * scale) as i32,
                 top: (48.0 * scale) as i32,
                 right: (320.0 * scale) as i32,
                 bottom: (80.0 * scale) as i32,
@@ -121,9 +120,9 @@ pub(crate) fn show_selector_popup(parent_hwnd: HWND, selector_type: SelectorType
         let mut pt = POINT { x: rect.left, y: rect.top };
         let _ = ClientToScreen(parent_hwnd, &mut pt);
 
-        let width = if is_hz { (100.0 * scale) as i32 } else { (200.0 * scale) as i32 };
+        let width = (120.0 * scale) as i32;
         let height = (items_count as f32 * 32.0 * scale) as i32;
-        let x_coord = if is_hz { pt.x } else { pt.x - (100.0 * scale) as i32 };
+        let x_coord = pt.x;
         let y_coord = pt.y - height - (4.0 * scale) as i32;
 
         let class_name = encode_wide("SelectorWindowClass");
@@ -304,13 +303,13 @@ unsafe extern "system" fn selector_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM
 
                 let mut text = encode_wide(&text_str);
                 let mut text_rect = RECT {
-                    left: (12.0 * scale) as i32,
+                    left: (8.0 * scale) as i32,
                     top: i as i32 * item_height,
-                    right: width - (24.0 * scale) as i32,
+                    right: width - (20.0 * scale) as i32,
                     bottom: (i as i32 + 1) * item_height,
                 };
                 let _ = SetTextColor(mem_hdc, text_color);
-                let _ = DrawTextW(mem_hdc, &mut text, &mut text_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                let _ = DrawTextW(mem_hdc, &mut text, &mut text_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | windows::Win32::Graphics::Gdi::DT_END_ELLIPSIS);
             }
 
             let _ = SelectObject(mem_hdc, old_font);
